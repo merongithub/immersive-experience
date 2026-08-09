@@ -1,0 +1,326 @@
+/* ANIMA — chrome.
+   Typographic layer over a black field. Monospace, ch-based grid, no scroll.
+   Everything here whispers: the world is the loud part. */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,200;0,400;1,200;1,400&display=swap");
+
+:root {
+  --c-black:   #000000;
+  --c-white:   #efe6dc;  /* bone */
+  --c-grey:    #6b6472;
+  --c-violet:  #a06bff;
+  --c-ember:   #ff6a3d;
+
+  --line: 2.5ch;
+  --font: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --idle: 1;             /* chrome opacity multiplier, driven by is-idle */
+}
+
+.white  { color: var(--c-white);  --c-current: var(--c-white); }
+.grey   { color: var(--c-grey);   --c-current: var(--c-grey); }
+.violet { color: var(--c-violet); --c-current: var(--c-violet); }
+.ember  { color: var(--c-ember);  --c-current: var(--c-ember); }
+
+/* ------------------------------------------------------------------ reset */
+
+* { box-sizing: border-box; }
+
+/* The UA stylesheet implements [hidden] as display:none, which ANY author
+   `display` rule silently outranks — and this file sets display on both
+   `button` and `#voice-controls`. That quietly broke every `hidden` attribute
+   in the markup, so the record controls showed before the mic was even on. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--c-black);
+  color: var(--c-white);
+  font-family: var(--font);
+  font-weight: 400;
+  line-height: var(--line);
+  letter-spacing: 0.02em;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-size: 3.6vw;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+@media (min-width:  768px) { body { font-size: 1.7vw; } }
+@media (min-width: 1024px) { body { font-size: 0.92vw; } }
+@media (min-width: 1800px) { body { font-size: 15px; } }
+
+::selection { color: #000; background: var(--c-grey); }
+
+button {
+  display: inline;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.italic { font-style: italic; }
+
+/* The musicforprogramming highlighter swipe: hover fills a block of colour
+   that bleeds a fraction of a ch past the glyphs. Over true black it reads
+   like a light being switched on behind the word. */
+.hover:hover,
+.mode.is-on {
+  color: var(--c-black);
+  background: var(--c-current);
+  box-shadow:
+     0.4ch 0    0 0 var(--c-current),
+    -0.3ch 0    0 0 var(--c-current),
+     0.4ch 0.2ch 0 0 var(--c-current),
+    -0.3ch 0.2ch 0 0 var(--c-current);
+}
+.mode.is-on { --c-current: var(--c-white); color: var(--c-black); }
+
+/* --------------------------------------------------------------- the view */
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ----------------------------------------------------------------- chrome */
+
+#chrome {
+  position: fixed;
+  inset: 0;
+  padding: var(--line);
+  padding-top: calc(var(--line) + env(safe-area-inset-top));
+  padding-bottom: calc(var(--line) + env(safe-area-inset-bottom));
+  pointer-events: none;
+  opacity: var(--idle);
+  transition: opacity 1400ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+#chrome > * { pointer-events: auto; }
+
+/* Six seconds of stillness and the type recedes. It never leaves — you can
+   always see where it is — but it stops asking for attention. */
+body.is-idle { --idle: 0.09; }
+
+#masthead {
+  position: absolute;
+  top: var(--line);
+  left: var(--line);
+  user-select: none;
+}
+
+#modes {
+  position: absolute;
+  bottom: var(--line);
+  left: var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+.mode { transition: color 300ms ease; }
+
+#transport {
+  position: absolute;
+  bottom: var(--line);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 3ch;
+  white-space: nowrap;
+  user-select: none;
+}
+#play { letter-spacing: 0.35ch; }
+#level { font-weight: 200; }
+#level .vol { padding: 0 0.6ch; }
+#vol-read { display: inline-block; width: 5ch; text-align: center; opacity: 0.7; }
+
+/* Until audio starts, the one control that matters stays lit even when the
+   rest of the chrome has receded. */
+body.is-idle #transport { opacity: 1; }
+body.is-playing.is-idle #transport { opacity: 0.35; }
+
+@media (max-width: 767px) {
+  #transport { gap: 2ch; }
+}
+
+#readout {
+  position: absolute;
+  top: var(--line);
+  right: var(--line);
+  text-align: right;
+  font-weight: 200;
+  user-select: none;
+  white-space: nowrap;
+}
+#readout .k { opacity: 0.55; margin-right: 1ch; }
+#readout .v { display: inline-block; width: 8ch; text-align: left; }
+#readout .k:not(:first-child) { margin-left: 2ch; }
+
+/* The only instruction in the whole interface. Centred, quiet, and it retires
+   itself once the session has actually started descending — by then you have
+   either understood it or you are not reading. */
+#stillness-hint {
+  position: absolute;
+  top: calc(var(--line) * 3.4);
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 200;
+  font-style: italic;
+  letter-spacing: 0.14ch;
+  user-select: none;
+  transition: opacity 3000ms ease;
+}
+body.is-descending #stillness-hint { opacity: 0; }
+
+@media (max-width: 767px) { #stillness-hint { display: none; } }
+
+/* Voice. Sits above the mode list, in the same type as everything else. */
+#voice-panel {
+  position: absolute;
+  bottom: calc(var(--line) * 6.2);
+  left: var(--line);
+  user-select: none;
+  line-height: var(--line);
+}
+#voice-panel.is-on #voice-toggle { color: var(--c-ember); --c-current: var(--c-ember); }
+#voice-controls { display: flex; flex-direction: column; align-items: flex-start; }
+#voice-rec.is-rec { color: var(--c-ember); --c-current: var(--c-ember); }
+#voice-rate { font-weight: 200; opacity: 0.7; min-height: var(--line); }
+
+/* The disclosure is only worth showing before the decision is made. */
+#voice-note {
+  font-weight: 200;
+  font-size: 0.85em;
+  opacity: 0.5;
+  max-width: 42ch;
+}
+#voice-panel.is-on #voice-note { display: none; }
+
+@media (max-width: 767px) {
+  #voice-note { display: none; }
+  #voice-panel { bottom: calc(var(--line) * 5.4); }
+}
+
+#hint {
+  position: absolute;
+  bottom: var(--line);
+  right: var(--line);
+  font-weight: 200;
+  text-align: right;
+  user-select: none;
+}
+#hint em { font-style: italic; color: var(--c-white); opacity: 0.75; }
+
+@media (max-width: 767px) {
+  #readout, #hint { display: none; }
+}
+
+/* ---------------------------------------------------------------- session */
+
+#session {
+  position: absolute;
+  top: calc(var(--line) * 2.6);
+  right: var(--line);
+  font-weight: 200;
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* The keepsake. Sits over the field rather than replacing it — the session is
+   still running underneath, and closing this returns you to it unbroken. */
+#sigil-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--line);
+  background: rgba(0, 0, 0, 0.88);
+  backdrop-filter: blur(6px);
+  padding: var(--line);
+  animation: sigil-in 900ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+#sigil-overlay[hidden] { display: none; }
+
+@keyframes sigil-in { from { opacity: 0; } to { opacity: 1; } }
+
+#sigil-holder canvas {
+  display: block;
+  width: min(74vh, 88vw);
+  height: auto;
+  border-radius: 2px;
+}
+
+#sigil-actions { display: flex; gap: 4ch; }
+#sigil-note { font-weight: 200; font-size: 0.85em; opacity: 0.45; }
+
+@media (max-width: 767px) {
+  #session { top: var(--line); right: var(--line); }
+  #sigil-actions { gap: 2.5ch; }
+}
+
+/* ------------------------------------------------------------------- boot */
+
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--line);
+  background: var(--c-black);
+  z-index: 10;
+  transition: opacity 1600ms ease;
+}
+body:not(.is-loading) #boot { opacity: 0; pointer-events: none; }
+
+/* The loader is the thesis in miniature: asymmetric envelope, long release. */
+.boot-dot {
+  width: 0.9ch;
+  height: 0.9ch;
+  border-radius: 50%;
+  background: var(--c-white);
+  animation: breathe 5.6s cubic-bezier(0.35, 0, 0.15, 1) infinite;
+}
+@keyframes breathe {
+  0%   { transform: scale(0.55); opacity: 0.25; }
+  32%  { transform: scale(2.6);  opacity: 1;    }  /* inhale: fast, eager   */
+  100% { transform: scale(0.55); opacity: 0.25; }  /* exhale: slow, releasing */
+}
+
+.boot-word {
+  font-weight: 200;
+  letter-spacing: 1.2ch;
+  text-indent: 1.2ch;
+  color: var(--c-grey);
+  font-size: 0.9em;
+}
+
+#boot.is-error .boot-dot { display: none; }
+#boot.is-error .boot-word {
+  letter-spacing: 0.02em;
+  text-indent: 0;
+  color: var(--c-ember);
+  max-width: 60ch;
+  text-align: center;
+  line-height: var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-dot { animation-duration: 11s; }
+}

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#000000" />
+<title>ANIMA</title>
+<link rel="stylesheet" href="css/anima.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body class="is-loading">
+
+  <!-- The field -->
+  <canvas id="view"></canvas>
+
+  <!-- Boot: a single breathing point. No spinner; the app is already breathing. -->
+  <div id="boot" aria-busy="true" aria-label="Loading">
+    <div class="boot-dot" aria-hidden="true"></div>
+    <div class="boot-word">ANIMA</div>
+  </div>
+
+  <!-- Chrome. Whispers. Fades to almost nothing when you stop moving. -->
+  <div id="chrome" aria-live="off">
+
+    <header id="masthead">
+      <div class="white">ANIMA</div>
+      <div class="grey italic">a field that breathes</div>
+    </header>
+
+    <nav id="modes" aria-label="Temperament">
+      <button type="button" class="mode hover grey" data-mode="focus">focus</button>
+      <button type="button" class="mode hover grey" data-mode="bath">sound bath</button>
+      <button type="button" class="mode hover grey" data-mode="meditate">meditate</button>
+      <button type="button" class="mode hover grey" data-mode="dance">dance</button>
+    </nav>
+
+    <!-- Audio cannot start without a gesture, so the gate is the interface.
+         One word, in the same type as everything else. -->
+    <div id="transport">
+      <button type="button" id="play" class="hover white">begin</button>
+      <div id="level" class="grey" aria-hidden="true">
+        <button type="button" class="vol hover grey" data-vol="-1">&minus;</button><!--
+     --><span id="vol-read">····</span><!--
+     --><button type="button" class="vol hover grey" data-vol="1">+</button>
+      </div>
+    </div>
+
+    <div id="readout" class="grey" aria-hidden="true">
+      <span class="k">breath</span><span id="r-breath" class="v">········</span>
+      <span class="k">energy</span><span id="r-energy" class="v">········</span>
+      <span class="k">voice</span><span id="r-voice" class="v">········</span>
+      <span class="k">depth</span><span id="r-depth" class="v">········</span>
+    </div>
+
+    <!-- The one instruction the piece needs. Fades once you have understood it. -->
+    <div id="stillness-hint" class="grey">be still &mdash; it deepens</div>
+
+    <!-- Voice. Opt-in, explained, and never required. -->
+    <div id="voice-panel">
+      <button type="button" id="voice-toggle" class="hover grey">add your voice</button>
+      <div id="voice-controls" hidden>
+        <button type="button" id="voice-rec" class="hover grey">hold to record</button>
+        <button type="button" id="voice-clear" class="hover grey" hidden>release the loop</button>
+        <div id="voice-rate" class="grey"></div>
+      </div>
+      <div id="voice-note" class="grey">
+        heard through the reverb &middot; nothing leaves your device &middot; headphones advised
+      </div>
+    </div>
+
+    <button type="button" id="session" class="hover grey">session ·&nbsp;<span id="session-time">0:00</span></button>
+
+    <div id="hint" class="grey">
+      <em>drag</em> look &middot; <em>scroll</em> near &middot; <em>r</em> release
+    </div>
+
+  </div>
+
+  <!-- The keepsake. The field keeps running behind it. -->
+  <div id="sigil-overlay" hidden>
+    <div id="sigil-holder"></div>
+    <div id="sigil-actions">
+      <button type="button" id="sigil-save" class="hover white">save image</button>
+      <button type="button" id="sigil-link" class="hover white">copy link</button>
+      <button type="button" id="sigil-close" class="hover grey">return</button>
+    </div>
+    <div id="sigil-note" class="grey">kept on this device unless you export it</div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
