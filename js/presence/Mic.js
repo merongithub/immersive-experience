@@ -22,6 +22,8 @@
  * echoCancellation stays on. Headphones remain the honest recommendation.
  */
 
+import { A4 } from "../audio/Engine.js";
+
 const CAPTURE_SECONDS = 8;
 
 export class Mic {
@@ -105,7 +107,7 @@ export class Mic {
     // degree, so repeats reinforce at that pitch and a hummed note blooms into
     // a sustained drone instead of echoing as discrete copies.
     this.delay = ctx.createDelay(1.0);
-    this.delay.delayTime.value = 1 / 110;
+    this.delay.delayTime.value = 4 / A4;   // A2 in the piece's own tuning
     this.fb = ctx.createGain();
     this.fb.gain.value = 0.80;
     this.damp = ctx.createBiquadFilter();
@@ -129,6 +131,11 @@ export class Mic {
   disable() {
     if (!this.enabled) return;
     this.enabled = false;
+    // Stop the recorder before the tracks, or it fires an error rather than
+    // ending cleanly — and the half-captured phrase is discarded either way.
+    try { this._rec?.stop(); } catch { /* already stopped */ }
+    this._rec = null;
+    this._muted = false;
     for (const t of this.stream?.getTracks() || []) t.stop();
     this.stream = null;
     try {
@@ -183,7 +190,10 @@ export class Mic {
        Opens fast so a phrase is never clipped at the front, closes slowly so
        the tail of a hum is allowed to decay into the reverb rather than being
        cut off mid-breath. */
-    const open = this.level > 0.13;
+    // Held shut while a guidance phrase is being captured: hearing yourself
+    // bloom through the reverb is lovely when you are toning and impossible to
+    // speak over when you are trying to say a sentence.
+    const open = !this._muted && this.level > 0.13;
     const target = open ? 0.9 : 0.0001;
     const tau = open ? 0.04 : 0.8;
     this.gate.gain.setTargetAtTime(target, this.engine.ctx.currentTime, tau);
@@ -309,5 +319,62 @@ export class Mic {
   clearRecording() {
     this.captured = null;
     this.engine.grainBuffer = this.engine._texture(3.0);
+  }
+
+  /* ------------------------------------------------------- spoken phrases
+   *
+   * Guidance is captured through MediaRecorder rather than through the ring
+   * above, and the difference matters. The ring copies whatever the analyser
+   * happens to be holding once per animation frame — roughly 800 of its 4096
+   * samples at 60fps — so it drops and duplicates a little at every frame
+   * boundary. That is inaudible inside a 200ms grain and it is the difference
+   * between a sentence and a stutter. MediaRecorder takes the stream itself.
+   */
+
+  /** True while a guidance phrase is being captured. */
+  get speaking() { return !!this._rec; }
+
+  /** Hold to speak. @returns {boolean} whether capture actually began. */
+  startPhrase() {
+    if (!this.enabled || this._rec) return false;
+    if (typeof MediaRecorder === "undefined") return false;
+
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+      .find((m) => MediaRecorder.isTypeSupported?.(m));
+
+    this._rec = new MediaRecorder(this.stream, mime ? { mimeType: mime } : undefined);
+    this._chunks = [];
+    this._rec.ondataavailable = (e) => { if (e.data.size) this._chunks.push(e.data); };
+    this._rec.start();
+    this.muteReturn(true);
+    return true;
+  }
+
+  /** Release. @returns {Promise<AudioBuffer|null>} the phrase, decoded. */
+  async stopPhrase() {
+    const rec = this._rec;
+    if (!rec) return null;
+    this._rec = null;
+
+    const stopped = new Promise((res) => { rec.onstop = res; });
+    rec.stop();
+    await stopped;
+    this.muteReturn(false);
+
+    if (!this._chunks.length) return null;
+    const blob = new Blob(this._chunks, { type: rec.mimeType });
+    this._chunks = [];
+    try {
+      return await this.engine.ctx.decodeAudioData(await blob.arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
+  muteReturn(on) {
+    this._muted = on;
+    if (on && this.gate) {
+      this.gate.gain.setTargetAtTime(0.0001, this.engine.ctx.currentTime, 0.05);
+    }
   }
 }

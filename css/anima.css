@@ -198,8 +198,11 @@ body.is-descending #stillness-hint { opacity: 0; }
 }
 #voice-panel.is-on #voice-toggle { color: var(--c-ember); --c-current: var(--c-ember); }
 #voice-controls { display: flex; flex-direction: column; align-items: flex-start; }
-#voice-rec.is-rec { color: var(--c-ember); --c-current: var(--c-ember); }
-#voice-rate { font-weight: 200; opacity: 0.7; min-height: var(--line); }
+#voice-rec.is-rec,
+#guide-rec.is-rec,
+#guide-play.is-rec { color: var(--c-ember); --c-current: var(--c-ember); }
+#voice-rate,
+#guide-count { font-weight: 200; opacity: 0.7; min-height: var(--line); }
 
 /* The disclosure is only worth showing before the decision is made. */
 #voice-note {
@@ -273,6 +276,33 @@ body.is-descending #stillness-hint { opacity: 0; }
   #session { top: var(--line); right: var(--line); }
   #sigil-actions { gap: 2.5ch; }
 }
+
+/* ------------------------------------------------------------------- film
+
+   Capture mode. The chrome goes entirely — not because it would be recorded
+   (captureStream reads the canvas only) but so the operator is watching the
+   same frame the file is getting, and so a screen recorder can be pointed at
+   this too. */
+
+body.is-film #chrome { display: none; }
+
+#film-hud {
+  position: fixed;
+  z-index: 30;
+  top: var(--line);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 2.5ch;
+  white-space: nowrap;
+  font-weight: 200;
+  user-select: none;
+}
+#film-hud[hidden] { display: none; }
+#film-rec.is-rec,
+#film-play.is-on { color: var(--c-ember); --c-current: var(--c-ember); }
+#film-read { font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------------- boot */
 

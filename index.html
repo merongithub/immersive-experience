@@ -68,6 +68,14 @@
       <div id="voice-controls" hidden>
         <button type="button" id="voice-rec" class="hover grey">hold to record</button>
         <button type="button" id="voice-clear" class="hover grey" hidden>release the loop</button>
+
+        <!-- Guidance. Your own voice, spoken once and returned to you through
+             the reverb at long intervals. -->
+        <button type="button" id="guide-rec" class="hover grey">hold to speak a line</button>
+        <button type="button" id="guide-play" class="hover grey" hidden>let it guide you</button>
+        <button type="button" id="guide-clear" class="hover grey" hidden>forget the lines</button>
+        <div id="guide-count" class="grey"></div>
+
         <div id="voice-rate" class="grey"></div>
       </div>
       <div id="voice-note" class="grey">
@@ -81,6 +89,16 @@
       <em>drag</em> look &middot; <em>scroll</em> near &middot; <em>r</em> release
     </div>
 
+  </div>
+
+  <!-- Film mode. Sits over the canvas but is never IN the recording:
+       captureStream reads the canvas alone, not the DOM above it. -->
+  <div id="film-hud" hidden>
+    <button type="button" id="film-render" class="hover white">render master</button>
+    <button type="button" id="film-save" class="hover grey" hidden>save wav</button>
+    <button type="button" id="film-play" class="hover grey">listen</button>
+    <button type="button" id="film-rec" class="hover white">record</button>
+    <span id="film-read" class="grey">ready</span>
   </div>
 
   <!-- The keepsake. The field keeps running behind it. -->

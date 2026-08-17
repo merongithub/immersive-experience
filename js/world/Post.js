@@ -21,6 +21,10 @@ export class Post {
     this.scene = scene;
     this.camera = camera;
 
+    /** 0 hides the entrainment pulse from the picture without touching the
+        sound. See the note in update() for why a focus film wants that. */
+    this.pulseAmount = 1;
+
     const size = renderer.getSize(new THREE.Vector2());
     this.composer = new EffectComposer(renderer);
     this.composer.setSize(size.x, size.y);
@@ -64,7 +68,16 @@ export class Post {
       + bus.breath * 0.20
       + bus.onset * 0.25
       + bus.anticipation * 0.18
-      + bus.depth * 0.30;
+      + bus.depth * 0.30
+      /* The entrainment pulse, made visible — and scaled by `pulseAmount`,
+         which a focus film sets to zero.
+         Two reasons, and either alone would be enough. Flicker in peripheral
+         vision is precisely what pulls eyes off a screen, so a visible pulse
+         works against the one thing a work film is for. And 6-10 Hz sits in the
+         band where photosensitive-epilepsy risk is highest, which is a
+         different calculation for a video playing to strangers than for a piece
+         on your own monitor. The AUDIO pulse is untouched. */
+      + bus.pulse * this.pulseAmount * (0.035 + bus.depth * 0.070);
 
     this.fx.uniforms.uVignette.value = 1.15 + bus.depth * 0.55;
   }

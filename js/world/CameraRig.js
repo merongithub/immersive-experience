@@ -25,6 +25,12 @@ export class CameraRig {
     this.theta = 0.4;             // azimuth
     this.phi = Math.PI * 0.30;    // base elevation — above the plane, looking down
     this.radius = 96;             // frames the whole disc with sky around it
+
+    /* How far the camera is allowed to tour. A focus film turns this well down:
+       the elevation swing is the most dramatic motion in the piece, and drama
+       in peripheral vision is exactly what a work film must not have. Beside a
+       code editor it should be close to a held shot that drifts. */
+    this.swing = 1;
     this._dt = 1 / 60;
 
     this.lookTarget = new THREE.Vector3(0, 0, 0);
@@ -101,8 +107,10 @@ export class CameraRig {
     // the view from inside a galaxy, the one everybody actually recognises.
     // The elevation swing narrows with depth too, settling into the plane
     // rather than continuing to tour the structure.
-    const swing = Math.sin(t * 0.021) * (1 - bus.depth * 0.45);
-    const phi = this.phi + swing * 0.68 + Math.sin(t * 0.047) * 0.06 + bus.depth * 0.30;
+    const swing = Math.sin(t * 0.021) * (1 - bus.depth * 0.45) * this.swing;
+    const phi = this.phi + swing * 0.68
+              + Math.sin(t * 0.047) * 0.06 * this.swing
+              + bus.depth * 0.30;
 
     // Closer on the inhale, and further out as the music builds so the whole
     // structure comes into view on a swell.

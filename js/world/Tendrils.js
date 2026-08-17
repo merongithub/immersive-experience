@@ -473,7 +473,9 @@ export class Tendrils {
 
     if (presence) {
       vu.uAttract.value.copy(presence.attractor);
-      vu.uAttractAmt.value = presence.amount;
+      // `force`, not `amount`: the attractor pulls for the music as well as for
+      // you, and only Presence knows how those two are currently balanced.
+      vu.uAttractAmt.value = presence.force;
     }
     vu.uVoice.value = bus.voice || 0;
 
