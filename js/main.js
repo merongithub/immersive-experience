@@ -13,8 +13,12 @@ import { Bus } from "./audio/Bus.js";
 import { Engine, EngineDriver } from "./audio/Engine.js";
 import { Organism } from "./world/Organism.js";
 import { Mic } from "./presence/Mic.js";
+import { Guide } from "./presence/Guide.js";
 import { Trace } from "./session/Trace.js";
 import { Sigil } from "./session/Sigil.js";
+import { Capture } from "./session/Capture.js";
+import { renderFilm, writeWAV, measure } from "./session/Offline.js";
+import { FilmDriver } from "./audio/FilmDriver.js";
 
 const view = document.getElementById("view");
 const boot = document.getElementById("boot");
@@ -50,11 +54,49 @@ let organism = null;
 let engine = null;
 const bus = new Bus();
 
+/* ---------------------------------------------------------------- film mode
+   ?film=1 turns the piece into something being recorded rather than sat in:
+   the frame size is fixed, the adaptive downscaler is locked, the chrome goes,
+   and depth follows a scripted curve instead of your stillness.
+
+   ?film=1&w=2560&h=1440&mins=30&mbps=40&p=1024 */
+const Q = new URLSearchParams(location.search);
+
+/* Focus films default to a worked session and a calmed picture; a bath keeps
+   the single long descent it was designed around. Every default is
+   overridable, but the defaults are the ones you actually want. */
+const _isFocus = Q.get("mode") === "focus";
+const _session = (Q.get("session") ?? (_isFocus ? "pomodoro" : "none")) !== "none";
+
+const film = Q.get("film") ? {
+  session: _session ? {
+    work: Math.max(60, +(Q.get("work") || 25) * 60),
+    brk:  Math.max(30, +(Q.get("brk") || 5) * 60),
+    lead: 90,
+  } : null,
+  // Off by default while filming: flicker in peripheral vision works against
+  // the one thing a work film is for, and 6-10 Hz is the band that carries a
+  // photosensitivity risk in front of an audience. The AUDIO pulse stays.
+  visualPulse: +(Q.get("vpulse") ?? 0),
+  swing: Q.get("swing") !== null ? +Q.get("swing") : (_isFocus ? 0.35 : 1),
+  readout: (Q.get("readout") ?? (_session ? "1" : "0")) !== "0",
+  width:      Math.max(256, +(Q.get("w") || 2560)),
+  height:     Math.max(256, +(Q.get("h") || 1440)),
+  pixelRatio: Math.max(0.5, +(Q.get("pr") || 1)),
+  minutes:    Math.max(1, +(Q.get("mins") || 30)),
+  bitrate:    Math.max(1, +(Q.get("mbps") || 40)) * 1e6,
+  fps:        Math.max(12, Math.min(120, +(Q.get("fps") || 60))),
+  // The mode list lives in the chrome, and film mode hides the chrome — so
+  // without this a film could only ever be rendered in the default
+  // temperament. A "sound bath" rendered in `meditate` is bells and no bowls.
+  mode:       Q.get("mode") || null,
+} : null;
+
 try {
   engine = new Engine("meditate");
   bus.setDriver(new EngineDriver(engine));
 
-  organism = new Organism({ view, bus });
+  organism = new Organism({ view, bus, film });
   organism.setMode("meditate");
   organism.start();
 
@@ -199,6 +241,62 @@ if (organism) {
     vClear.hidden = true;
   });
 
+  /* --- guidance ---
+     You speak the lines; the piece says them back to you, through the reverb,
+     at long intervals. Same hold-to-record gesture as the loop, and the same
+     privacy story: the phrases are AudioBuffers in memory and nothing else. */
+  const guide = new Guide(engine);
+  organism.guide = guide;
+
+  const gRec = document.getElementById("guide-rec");
+  const gPlay = document.getElementById("guide-play");
+  const gClear = document.getElementById("guide-clear");
+  const gCount = document.getElementById("guide-count");
+
+  function drawGuide() {
+    if (!gCount) return;
+    const n = guide.count;
+    gCount.textContent = n
+      ? `${n} line${n === 1 ? "" : "s"} · ${guide.on ? "guiding you" : "silent"}`
+      : "";
+    if (gPlay) {
+      gPlay.hidden = n === 0;
+      gPlay.textContent = guide.on ? "let it be quiet" : "let it guide you";
+      gPlay.classList.toggle("is-rec", guide.on);
+    }
+    if (gClear) gClear.hidden = n === 0;
+  }
+  drawGuide();
+
+  const gStart = (e) => {
+    e.preventDefault();
+    if (!mic.enabled) return;
+    if (mic.startPhrase()) {
+      gRec.classList.add("is-rec");
+      gRec.textContent = "listening···";
+    }
+  };
+  const gStop = async () => {
+    if (!mic.speaking) return;
+    gRec.classList.remove("is-rec");
+    gRec.textContent = "hold to speak a line";
+    const buf = await mic.stopPhrase();
+    // A phrase under a second is a slip of the finger, not a line.
+    if (buf && buf.duration > 1.0) {
+      guide.add(buf);
+      // The first line switches guidance on by itself. Recording something and
+      // then having to find a second control to hear it is a step too many.
+      if (guide.count === 1) guide.setOn(true);
+      drawGuide();
+    }
+  };
+  gRec?.addEventListener("pointerdown", gStart);
+  addEventListener("pointerup", gStop);
+  addEventListener("pointercancel", gStop);
+
+  gPlay?.addEventListener("click", () => { guide.setOn(!guide.on); drawGuide(); });
+  gClear?.addEventListener("click", () => { guide.clear(); drawGuide(); });
+
   // Tilt, on devices that have it. Asked for once, on a real gesture.
   if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
     view.addEventListener("pointerdown", function once() {
@@ -316,6 +414,248 @@ if (organism) {
           : "listening for your breath···";
       }
     }, 90);
+  }
+
+  /* --- film ---
+     A take, rather than a session. Depth follows the scripted curve so the
+     opening stays bright and the piece surfaces before the video ends, and the
+     recording stops itself at length — an hour-long take is not something you
+     want to have to sit and watch in order to end it. */
+  if (film) {
+    document.body.classList.add("is-film");
+    if (film.mode) setMode(film.mode);
+    organism.depth.scriptTo(film.minutes * 60, film.session);
+
+    const hud = document.getElementById("film-hud");
+    const fRec = document.getElementById("film-rec");
+    const fRead = document.getElementById("film-read");
+    hud.hidden = false;
+
+    const fRender = document.getElementById("film-render");
+    const fSave = document.getElementById("film-save");
+
+    const capture = new Capture({
+      canvas: view, source: engine, bitrate: film.bitrate, fps: film.fps,
+    });
+    organism.capture = capture;
+
+    // State the take before it is taken. The temperament decides whether this
+    // is a bath or something else entirely, and it is the one setting you
+    // cannot see once the chrome is hidden.
+    fRead.textContent =
+      `${organism.mode} · ${film.minutes}:00 · ${film.width}×${film.height}`
+      + (film.session
+          ? ` · ${film.session.work / 60}/${film.session.brk / 60} pomodoro`
+          : " · continuous")
+      + (film.visualPulse ? " · visual pulse ON" : "");
+
+    const clock = (s) =>
+      `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+    const stamp = () =>
+      new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+
+    /* --- the master ---
+       Render the score offline, then play THAT rather than performing it live.
+       Nothing can drop a sample in an OfflineAudioContext, and the score it
+       emits alongside keeps the visuals' foreknowledge intact — see FilmDriver
+       for why that matters more than it sounds like it should. */
+    let master = null;        // { buffer, score }
+    let filmDriver = null;
+    let playCtx = null;
+
+    async function renderMaster() {
+      fRender.textContent = "···";
+      try {
+        // The generative engine must stop; the film is the performance now.
+        if (engine.running) await engine.pause();
+
+        const t0 = performance.now();
+        master = await renderFilm({
+          mode: organism.mode,
+          minutes: film.minutes,
+          // The audio has to fall quiet at the moment the picture falls dark,
+          // so both read the same session config.
+          session: film.session,
+          onProgress: (u) => {
+            fRead.textContent = `rendering ${(u * 100).toFixed(0)}%`;
+          },
+        });
+
+        fRead.textContent = "encoding···";
+        await new Promise((r) => setTimeout(r, 0));
+
+        // A live context to play it back through. The click is the gesture.
+        playCtx = playCtx || new (window.AudioContext || window.webkitAudioContext)(
+          { latencyHint: "playback" });
+        await playCtx.resume();
+
+        filmDriver = new FilmDriver(playCtx, master.buffer, master.score);
+        bus.setDriver(filmDriver);
+        capture.source = filmDriver;
+        organism.depth.external = true;   // the score owns depth now
+
+        const m = measure(master.buffer);
+        const took = (performance.now() - t0) / 1000;
+        fRender.textContent = "re-render";
+        fSave.hidden = false;
+        drawPlay();
+        fRead.textContent =
+          `master ready · ${clock(master.score.duration)} · `
+          + `peak ${m.peakDb.toFixed(1)} dBFS · rms ${m.rmsDb.toFixed(1)} · `
+          + `rendered in ${took.toFixed(0)}s`;
+      } catch (err) {
+        console.error(err);
+        fRender.textContent = "render master";
+        fRead.textContent = err.message;
+      }
+    }
+
+    async function saveMaster() {
+      if (!master) return;
+      if (!window.showSaveFilePicker) {
+        fRead.textContent = "this browser cannot stream a file to disk — use Chrome";
+        return;
+      }
+      try {
+        const handle = await showSaveFilePicker({
+          suggestedName: `anima-${film.minutes}min-${stamp()}.wav`,
+          types: [{ description: "WAV", accept: { "audio/wav": [".wav"] } }],
+        });
+        const w = await handle.createWritable();
+        await writeWAV(master.buffer, w, (u) => {
+          fRead.textContent = `writing wav ${(u * 100).toFixed(0)}%`;
+        });
+        await w.close();
+
+        // The score travels with it — the visuals cannot be re-driven without it.
+        const blob = new Blob([JSON.stringify(master.score)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `anima-${film.minutes}min-${stamp()}.score.json`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+
+        fRead.textContent = "wav + score saved";
+      } catch (err) {
+        console.error(err);
+        fRead.textContent = err.message;
+      }
+    }
+
+    fRender?.addEventListener("click", renderMaster);
+    fSave?.addEventListener("click", saveMaster);
+
+    /* --- audition ---
+       Film mode hides the chrome, and the chrome is where `begin` and the
+       volume live — so without this there is no way to hear a master short of
+       recording one, which is a poor way to discover you rendered the wrong
+       temperament. Plays the rendered master if there is one, and the live
+       instrument if there is not. */
+    const fPlay = document.getElementById("film-play");
+
+    function drawPlay() {
+      const on = filmDriver ? filmDriver.playing : engine.running;
+      fPlay.textContent = on ? "stop" : "listen";
+      fPlay.classList.toggle("is-on", on);
+    }
+
+    async function toggleListen() {
+      if (filmDriver) {
+        filmDriver.playing ? filmDriver.stop() : filmDriver.start(0);
+      } else {
+        await toggle();
+      }
+      drawPlay();
+    }
+
+    fPlay?.addEventListener("click", toggleListen);
+
+    async function startTake() {
+      try {
+        /* Recorder first, film second, and the order is load-bearing.
+           capture.start() awaits a save dialog that can sit open for as long
+           as it takes to pick a folder — starting playback before that lets
+           the master run that far ahead of the picture, and lining the
+           pristine WAV up with the video is the entire reason to render
+           offline in the first place. */
+        await capture.start(`anima-${film.minutes}min-${stamp()}`);
+
+        if (filmDriver) {
+          filmDriver.stop();
+          filmDriver.start(0);
+        } else {
+          // No master rendered — fall back to filming the live performance,
+          // where the recorded audio IS the audio and sync is inherent.
+          if (!engine.running) {
+            await toggle();
+            if (!engine.running) { fRead.textContent = "audio would not start"; return; }
+          }
+          organism.depth.scriptTo(film.minutes * 60, film.session);
+        }
+
+        // Whatever gap remains between the recorder opening and the film
+        // starting, measured rather than assumed — it is what you pass to
+        // ffmpeg's -itsoffset when muxing the master back over the video.
+        capture.leadIn = (performance.now() - capture.startedAt) / 1000;
+
+        fRec.textContent = "stop";
+        fRec.classList.add("is-rec");
+        drawPlay();
+      } catch (err) {
+        console.error(err);
+        fRead.textContent = err.message;
+      }
+    }
+
+    async function endTake() {
+      fRec.textContent = "···";
+      fRec.classList.remove("is-rec");
+      const out = await capture.stop();
+      filmDriver?.stop();
+      drawPlay();
+      fRec.textContent = "record";
+      if (out) {
+        const lead = capture.leadIn ? ` · lead-in ${capture.leadIn.toFixed(3)}s` : "";
+        fRead.textContent =
+          `${out.saved ? "saved" : "downloaded"} · ${clock(out.seconds)} · `
+          + `${(out.bytes / 1e9).toFixed(2)} GB${lead}`;
+      }
+    }
+
+    fRec?.addEventListener("click", () => {
+      capture.recording ? endTake() : startTake();
+    });
+
+    if (!Capture.supported) {
+      fRec.hidden = true;
+      fRead.textContent = "this browser cannot record — use Chrome";
+    }
+
+    setInterval(() => {
+      const s = capture.stats();
+      if (!s) return;
+      // End on the PLAYHEAD when there is a master, not on wall-clock: if the
+      // renderer stutters the take runs long, and cutting it by the clock
+      // would clip the last strike off the end of the film.
+      const done = filmDriver
+        ? filmDriver.ended
+        : s.seconds >= film.minutes * 60;
+      if (done) { endTake(); return; }
+      // Reporting measured fps matters: this is the one number that tells you
+      // whether the take is worth keeping before you have watched it back.
+      fRead.textContent =
+        `${clock(s.seconds)} / ${film.minutes}:00 · ${s.fps.toFixed(1)} fps · `
+        + `${s.gb.toFixed(2)} GB${s.saved ? "" : " · in memory"}`;
+    }, 1000);
+
+    // rAF halts in a hidden tab, which freezes breath and the pulse while the
+    // scheduler keeps playing bowls. That is an unusable take, so say so
+    // rather than letting it be discovered in the edit.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && capture.recording) {
+        console.warn("[ANIMA] tab hidden while recording — the frame is frozen");
+      }
+    });
   }
 
   /* --- camera mode in the hint line --- */

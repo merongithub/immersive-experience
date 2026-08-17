@@ -31,8 +31,17 @@ const SCALES = {
   phrygianDominant: [0, 1, 4, 5, 7, 8, 10],   // charged
 };
 
+/* Entrainment. `pulseHz` is the isochronic rate and `pulseDepth` how far the
+   drone bed is modulated by it — monaural amplitude pulsing, so it survives
+   being played on a laptop speaker where a true binaural beat would collapse
+   to nothing. Kept shallow: at 0.2 it is something you notice only once you
+   have stopped listening for it, which is the point.
+
+   focus sits up in alpha (~10 Hz, alert and outward); everything else sits in
+   theta (~6 Hz, inward), and `dance` has its own pulse already. */
 const VOICING = {
   focus: {
+    pulseHz: 10.0, pulseDepth: 0.15,
     scale: "aeolian", root: 33,          // A1
     voices: [0, 0, 4, 7, 11],            // scale-degree indices
     octaves: [0, 12, 12, 24, 24],
@@ -45,6 +54,7 @@ const VOICING = {
      bed and the bells step aside entirely. Long decays are the point — a bowl
      that rings for thirty seconds is what separates a bath from ambient music. */
   bath: {
+    pulseHz: 6.0, pulseDepth: 0.22,
     scale: "dorian", root: 33,
     voices: [0, 4, 0, 4],
     octaves: [0, 0, 12, 12],
@@ -55,6 +65,7 @@ const VOICING = {
     bowlRate: 1 / 14, gongRate: 1 / 95, chimeRate: 1 / 26,
   },
   meditate: {
+    pulseHz: 6.5, pulseDepth: 0.20,
     scale: "dorian", root: 33,
     voices: [0, 2, 4, 7, 9],
     octaves: [0, 12, 12, 24, 24],
@@ -64,6 +75,7 @@ const VOICING = {
     droneGain: 0.42, pulse: false,
   },
   dance: {
+    pulseHz: 0, pulseDepth: 0,           // it already has a pulse; two would fight
     scale: "phrygianDominant", root: 31, // G1 — a touch darker under the pulse
     voices: [0, 3, 4, 7, 10, 11],
     octaves: [0, 0, 12, 12, 24, 24],
@@ -74,13 +86,45 @@ const VOICING = {
   },
 };
 
-const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+/**
+ * Reference pitch. 432 rather than concert 440 — an aesthetic choice, not a
+ * physiological one: there is no evidence a tuning fork changes what a nervous
+ * system does. It sits about 32 cents flat of standard, which is far enough to
+ * read as warmer and dark and near enough that nothing sounds out of tune.
+ *
+ * Everything derives from here — drone, bells, bowls, gong, chimes, and the
+ * mic's tuned delay — so this constant is the only place tuning lives.
+ */
+export const A4 = 432;
+
+const mtof = (m) => A4 * Math.pow(2, (m - 69) / 12);
+
+/* Pacing per temperament, in seconds. Lives here rather than inside setMode()
+   because an Engine built straight onto a mode — which is how an offline
+   render makes one — never calls setMode and would otherwise breathe at the
+   meditate rate whatever temperament it was rendering. */
+const PERIOD = { focus: 12.0, bath: 13.5, meditate: 11.0, dance: 5.2 };
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 
 export class Engine {
-  constructor(mode = "meditate") {
-    this.ctx = null;
+  /**
+   * @param {string}  mode
+   * @param {BaseAudioContext=} ctx  inject an OfflineAudioContext to render
+   *   the piece as a file instead of playing it.
+   */
+  constructor(mode = "meditate", ctx = null) {
+    this.ctx = ctx;
+
+    /* The clock the piece schedules against. Null means "ask the context",
+       which is right while playing. An OfflineAudioContext's currentTime does
+       not advance until startRendering() runs, so a render sets this to a
+       virtual cursor and walks it forward instead. Everything downstream
+       schedules against absolute times either way, so the same code path
+       produces the same piece — which is the only way an offline render is
+       trustworthy. */
+    this._vnow = null;
+
     this.modeName = mode;
     this.cfg = VOICING[mode];
     this.running = false;
@@ -89,8 +133,13 @@ export class Engine {
     // Breath is owned by the engine, not the driver: the pacing layer is an
     // actual sound, so its phase has to be authoritative for both ear and eye.
     this.breathPhase = 0;
-    this.breathPeriod = 11.0;
-    this.targetPeriod = 11.0;
+    this.breathPeriod = PERIOD[mode] ?? 11.0;
+    this.targetPeriod = PERIOD[mode] ?? 11.0;
+
+    // Entrainment phase, owned here for exactly the same reason breath is: the
+    // visuals pulse from this number too, so there must only be one of it.
+    this.pulsePhase = 0;
+    this.pulseValue = 0;
 
     this.nextBell = 0;
     this.nextGrain = 0;
@@ -106,21 +155,29 @@ export class Engine {
     this.lastBellAt = -99;
   }
 
+  /* --------------------------------------------------------------- clock */
+
+  /** The time the piece schedules against. See `_vnow` in the constructor. */
+  _now() {
+    return this._vnow !== null ? this._vnow : this.ctx.currentTime;
+  }
+
+  /**
+   * Record a scheduled event. Everything that will make a sound goes through
+   * here, so a listener can build a complete score without watching the array
+   * — which is not watchable, since _schedule() prunes it as the playhead
+   * moves and anything past is gone.
+   */
+  _emit(e) {
+    this.upcoming.push(e);
+    this.onEvent?.(e);
+  }
+
   /* --------------------------------------------------------------- start */
 
-  /** Must be called from a user gesture — browsers refuse otherwise. */
-  async start() {
-    if (this.running) return;
-    if (!this.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) throw new Error("Web Audio is not available in this browser.");
-      this.ctx = new AC({ latencyHint: "playback" });
-      this._build();
-    }
-    await this.ctx.resume();
-    this.running = true;
-
-    const t = this.ctx.currentTime;
+  /** Set the cursors and open the master. Shared by playing and rendering, so
+      a film begins exactly the way a session does. */
+  _arm(t) {
     this.nextBell = t + 2.0;
     this.nextGrain = t + 0.4;
     this.nextPulse = t + 1.0;
@@ -134,8 +191,36 @@ export class Engine {
     this.master.gain.exponentialRampToValueAtTime(this.volume, t + 6.0);
 
     this._startDrone();
+  }
+
+  /** Must be called from a user gesture — browsers refuse otherwise. */
+  async start() {
+    if (this.running) return;
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw new Error("Web Audio is not available in this browser.");
+      this.ctx = new AC({ latencyHint: "playback" });
+    }
+    if (!this.master) this._build();
+    await this.ctx.resume();
+    this.running = true;
+
+    this._arm(this.ctx.currentTime);
     this.timer = setInterval(() => this._schedule(), TICK_MS);
     this._schedule();
+  }
+
+  /**
+   * Arm the piece for an offline render. No timers are started — the renderer
+   * owns the clock and walks `_vnow` forward itself, calling _schedule() and
+   * tick() at the rates they would have run at live.
+   */
+  prepareOffline(volume = 0.8) {
+    this._build();
+    this.volume = volume;
+    this.running = true;
+    this._vnow = 0;
+    this._arm(0);
   }
 
   async pause() {
@@ -160,7 +245,13 @@ export class Engine {
 
     // Gentle ceiling. Granular layers stack unpredictably and a stray peak in
     // a meditation app is worse than a little compression.
+    // Held on `this` so a recorder can tap it. The chain is master → comp →
+    // destination, which means the volume control sits BEFORE the compressor:
+    // turning it up to get a hotter recording pushes harder into a 3.5:1 ratio
+    // and changes the compression rather than the level. Record from here and
+    // do gain in post.
     const comp = ctx.createDynamicsCompressor();
+    this.comp = comp;
     comp.threshold.value = -18;
     comp.knee.value = 26;
     comp.ratio.value = 3.5;
@@ -196,10 +287,20 @@ export class Engine {
     this.bellBus = ctx.createGain();
     this.breathBus = ctx.createGain();
     this.bowlBus = ctx.createGain();
-    for (const b of [this.droneBus, this.grainBus, this.bellBus, this.breathBus, this.bowlBus]) {
+
+    /* The entrainment stage. Only the sustained beds pass through it: pulsing
+       the struck layers would chop a bowl's thirty-second tail into stutter,
+       and the tail is the whole reason a bowl is there. */
+    this.pulse = ctx.createGain();
+    this.pulse.gain.value = 1;
+    this.pulse.connect(this.dry);
+    this.pulse.connect(this.verb);
+
+    for (const b of [this.grainBus, this.bellBus, this.bowlBus]) {
       b.connect(this.dry);
       b.connect(this.verb);
     }
+    for (const b of [this.droneBus, this.breathBus]) b.connect(this.pulse);
     this.bowlBus.gain.value = 0.60;
     this.droneBus.gain.value = this.cfg.droneGain;
     this.grainBus.gain.value = this.cfg.grainGain;
@@ -301,7 +402,7 @@ export class Engine {
         return o;
       });
 
-      const t = ctx.currentTime;
+      const t = this._now();
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(rnd(0.16, 0.30) * (2.6 / cfg.voices.length), t + rnd(5, 14));
 
@@ -333,7 +434,7 @@ export class Engine {
       o.frequency.exponentialRampToValueAtTime(mtof(midi), when + glide);
     }
     // Announced ahead so the visuals can lean into it before it is audible.
-    this.upcoming.push({ type: "drift", at: when, weight: 1, glide });
+    this._emit({ type: "drift", at: when, weight: 1, glide });
   }
 
   /* --------------------------------------------------------------- voices */
@@ -367,7 +468,7 @@ export class Engine {
       o.stop(when + decay + 0.2);
     });
 
-    this.upcoming.push({ type: "bell", at: when, weight: amp / 0.26, decay });
+    this._emit({ type: "bell", at: when, weight: amp / 0.26, decay });
   }
 
   /* ----------------------------------------------------------- sound bath */
@@ -429,7 +530,7 @@ export class Engine {
     strike.start(when, Math.random() * 1.0, 0.4);
     strike.stop(when + 0.45);
 
-    this.upcoming.push({ type: "bowl", at: when, weight: 1.15, decay });
+    this._emit({ type: "bowl", at: when, weight: 1.15, decay });
   }
 
   /**
@@ -469,7 +570,7 @@ export class Engine {
       o.stop(when + d + 0.4);
     }
 
-    this.upcoming.push({ type: "gong", at: when, weight: 1.6, decay });
+    this._emit({ type: "gong", at: when, weight: 1.6, decay });
   }
 
   /** Koshi-style chime: bright, short, sparse. The punctuation. */
@@ -499,7 +600,7 @@ export class Engine {
         o.start(t); o.stop(t + decay + 0.2);
       });
     }
-    this.upcoming.push({ type: "chime", at: when, weight: 0.7 });
+    this._emit({ type: "chime", at: when, weight: 0.7 });
   }
 
   _grain(when) {
@@ -536,7 +637,7 @@ export class Engine {
     g.gain.exponentialRampToValueAtTime(0.0001, when + 0.42);
     o.connect(g); g.connect(this.dry);
     o.start(when); o.stop(when + 0.5);
-    this.upcoming.push({ type: "pulse", at: when, weight: 1 });
+    this._emit({ type: "pulse", at: when, weight: 1 });
   }
 
   /** Pacing layer: filtered noise that swells with the breath. In meditate the
@@ -566,8 +667,7 @@ export class Engine {
 
   _schedule() {
     if (!this.running) return;
-    const ctx = this.ctx;
-    const until = ctx.currentTime + LOOKAHEAD;
+    const until = this._now() + LOOKAHEAD;
     const cfg = this.cfg;
 
     // bellRate 0 means "this temperament has no bells" — guard the divide, or
@@ -576,9 +676,23 @@ export class Engine {
     // session slows the score rather than stalling the scheduler in a loop.
     const rs = Math.max(0.12, this._rateScale ?? 1);
 
+    /* The event gate is a PROBABILITY that a due event actually plays, not a
+       multiplier on the interval — and the difference is the whole reason it
+       works. Stretching the interval sets the next cursor from the rate in
+       force when the last event fired, so one bell struck inside a quiet work
+       block pushes the cursor a couple of minutes ahead and it sails clean over
+       the break. The gate could then only ever remove events, never give them
+       back.
+
+       Rolling per event keeps the natural rhythm underneath and reads the gate
+       at the moment each one comes due, so the break is busy the instant it
+       starts. Applied to the struck layers only: the drone, grains and breath
+       bed are the floor, not the events. */
+    const gate = this._eventGate ?? 1;
+
     if (cfg.bellRate > 0) {
       while (this.nextBell < until) {
-        this._bell(this.nextBell);
+        if (Math.random() < gate) this._bell(this.nextBell);
         this.nextBell += rnd(0.45, 2.1) / (cfg.bellRate * rs);
       }
     } else {
@@ -587,7 +701,10 @@ export class Engine {
 
     if (cfg.bowlRate > 0) {
       while (this.nextBowl < until) {
-        this._bowl(this.nextBowl);
+        // Bowls are exempt from DEPTH thinning below — they are the anchor of a
+        // deep session — but not from the gate. In a bath they hold the piece
+        // together; in a work block they are the single loudest event in it.
+        if (Math.random() < gate) this._bowl(this.nextBowl);
         // Bowls thin far less than everything else — they are the anchor of a
         // deep session, not decoration to be stripped out of it.
         this.nextBowl += rnd(0.6, 1.7) / (cfg.bowlRate * (0.55 + 0.45 * rs));
@@ -596,14 +713,14 @@ export class Engine {
 
     if (cfg.gongRate > 0) {
       while (this.nextGong < until) {
-        this._gong(this.nextGong);
+        if (Math.random() < gate) this._gong(this.nextGong);
         this.nextGong += rnd(0.7, 1.5) / cfg.gongRate;
       }
     } else { this.nextGong = until; }
 
     if (cfg.chimeRate > 0) {
       while (this.nextChime < until) {
-        this._chime(this.nextChime);
+        if (Math.random() < gate) this._chime(this.nextChime);
         this.nextChime += rnd(0.5, 1.9) / (cfg.chimeRate * rs);
       }
     } else { this.nextChime = until; }
@@ -626,14 +743,23 @@ export class Engine {
 
     // Filter sweep follows the breath, one cycle ahead.
     const c = cfg.cutoff;
-    const now = ctx.currentTime;
+    const now = this._now();
     this.filter?.frequency.cancelScheduledValues(now);
     this.filter?.frequency.setTargetAtTime(
       c[0] + (c[1] - c[0]) * (0.25 + 0.75 * this._breathValue()), now, 1.6
     );
 
-    // Drop events that have already sounded.
-    this.upcoming = this.upcoming.filter((e) => e.at > now - 0.5);
+    /* Drop events that have already sounded — in place, and deliberately so.
+       filter() returns a NEW array, which quietly breaks anything holding on
+       to this one; the offline renderer builds its score from these events and
+       would lose the thread after the first pass. It also saves an allocation
+       every 300 ms for the whole session. */
+    let w = 0;
+    for (let i = 0; i < this.upcoming.length; i++) {
+      const e = this.upcoming[i];
+      if (e.at > now - 0.5) this.upcoming[w++] = e;
+    }
+    this.upcoming.length = w;
   }
 
   _breathValue() {
@@ -657,20 +783,72 @@ export class Engine {
     this.breathPhase = (this.breathPhase + dt / this.breathPeriod) % 1;
 
     const b = this._breathValue();
-    const now = this.ctx.currentTime;
+    const now = this._now();
     this.breathGain.gain.setTargetAtTime(0.0001 + b * 0.20, now, 0.12);
     this.breathFilter.frequency.setTargetAtTime(380 + b * 520, now, 0.3);
+
+    /* --- entrainment ----------------------------------------------------
+       Driven from JS on one phase rather than from an audio-rate LFO node.
+       An LFO would be free-running and could not be read back, so the visible
+       pulse would drift out of step with the audible one — and a throb you can
+       see slightly ahead of the throb you can hear is far worse than no throb.
+       Same argument as breath: the Engine owns the phase, both senses read it.
+
+       tau sits under one frame, so the ~10 steps per cycle smooth into a
+       continuous shape instead of stepping audibly. */
+    const hz = this._pulseHz();
+    const depth = this.cfg.pulseDepth || 0;
+
+    if (hz > 0 && depth > 0 && dt < 0.1) {
+      this.pulsePhase = (this.pulsePhase + dt * hz) % 1;
+      // Half-wave rectified, gently sharpened: on for half the cycle, off for
+      // the other half. That on/off is what makes it isochronic rather than
+      // merely a tremolo.
+      this.pulseValue = Math.pow(
+        Math.max(0, Math.sin(this.pulsePhase * Math.PI * 2)), 0.8);
+      this.pulse.gain.setTargetAtTime(
+        1 - depth + depth * this.pulseValue, now, 0.012);
+    } else {
+      // A hidden tab throttles rAF, and stepping a 6 Hz pulse at 4 fps is
+      // noise. Holding the gate open is the graceful failure; stuttering is
+      // not — so the pulse stops rather than degrades.
+      this.pulseValue = 0;
+      this.pulse.gain.setTargetAtTime(1, now, 0.25);
+    }
+  }
+
+  /** Theta while you settle, easing toward its slow edge as the session goes
+      down. focus sits in alpha instead and eases toward theta — the same
+      gesture, a register up, because focus is a different job. */
+  _pulseHz() {
+    const base = this.cfg.pulseHz || 0;
+    return base ? base * (1 - (this._depth || 0) * 0.25) : 0;
+  }
+
+  /* ------------------------------------------------------------- ducking
+     Make room for a spoken line without stopping the piece. The beds step
+     back; the bowls do not, so a line landing over a ringing bowl sits inside
+     it rather than replacing it. */
+
+  duck(amount = 0.55, seconds = 0.9) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.droneBus.gain.setTargetAtTime(this.cfg.droneGain * amount, t, seconds * 0.4);
+    this.grainBus.gain.setTargetAtTime(this.cfg.grainGain * amount, t, seconds * 0.4);
+  }
+
+  unduck(seconds = 2.6) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.droneBus.gain.setTargetAtTime(this.cfg.droneGain, t, seconds * 0.4);
+    this.grainBus.gain.setTargetAtTime(this.cfg.grainGain, t, seconds * 0.4);
   }
 
   setMode(name) {
     if (!VOICING[name] || name === this.modeName) return;
     this.modeName = name;
     this.cfg = VOICING[name];
-    this.targetPeriod =
-      name === "dance" ? 5.2 :
-      name === "focus" ? 12.0 :
-      name === "bath"  ? 13.5 :   // slowest of all — a bath sets the pace
-      11.0;
+    this.targetPeriod = PERIOD[name] ?? 11.0;
 
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -705,7 +883,7 @@ export class Engine {
   setDepth(d, dwell = 0) {
     this._depth = d;
     if (!this.ctx || !this.running) return;
-    const t = this.ctx.currentTime;
+    const t = this._now();
 
     // Sparser and more spacious. Bowls stay — they are the anchor — but bells
     // and grains step back so silence has room to do its work.
@@ -731,10 +909,36 @@ export class Engine {
     this._deepPeriod = base * (1 + d * 0.22 + Math.min(0.35, dwell * 0.02));
   }
 
+  /**
+   * How much the struck layers are allowed to play, 0..1.
+   *
+   * Bowls are deliberately NOT exempt here, unlike under depth: in a bath they
+   * are the anchor and must survive the descent, but in a work block they are
+   * the loudest single event in the piece and the one most likely to lift
+   * somebody's eyes off what they are doing.
+   */
+  setEventGate(g) {
+    this._eventGate = Math.max(0, Math.min(1, g));
+  }
+
   /** A single chime to acknowledge you came back. Never more than one. */
   greet() {
     if (!this.running || !this.ctx) return;
     this._chime(this.ctx.currentTime + 0.12);
+  }
+
+  /**
+   * A recording tap, after the compressor and after the master gain, so what
+   * is captured is exactly what is heard — and so recording never requires
+   * touching the master. See the note in _build() for why that matters.
+   *
+   * @returns {MediaStreamAudioDestinationNode|null}
+   */
+  tap() {
+    if (!this.ctx || !this.comp) return null;
+    const dest = this.ctx.createMediaStreamDestination();
+    this.comp.connect(dest);
+    return dest;
   }
 
   setVolume(v) {
@@ -790,58 +994,13 @@ export class EngineDriver {
       bus.energy += (0.06 - bus.energy) * (1 - Math.exp(-dt / 3));
       bus.onset += (0 - bus.onset) * (1 - Math.exp(-dt / 0.4));
       bus.anticipation = 0;
+      bus.pulse = 0;
       return;
     }
 
-    const A = e.analyser;
-    A.getByteFrequencyData(e.freq);
-    const f = e.freq;
-    const n = f.length;
-    const nyquist = e.ctx.sampleRate / 2;
-    const binOf = (hz) => Math.max(0, Math.min(n - 1, Math.round((hz / nyquist) * n)));
+    bus.pulse = e.pulseValue || 0;
 
-    const band = (lo, hi) => {
-      const a = binOf(lo), b = binOf(hi);
-      let s = 0;
-      for (let i = a; i <= b; i++) s += f[i];
-      return (s / Math.max(1, b - a + 1)) / 255;
-    };
-
-    const raw = {
-      sub:      band(20, 60),
-      bass:     band(60, 180),
-      lowMid:   band(180, 500),
-      mid:      band(500, 1600),
-      presence: band(1600, 5000),
-      air:      band(5000, 14000),
-    };
-
-    // Bands keep their asymmetric envelopes: the analyser is already smoothed,
-    // but smoothing is not the same as shaping, and the shape is the feeling.
-    bus.sub      = follow(bus.sub,      raw.sub,      0.5,  1.4, dt);
-    bus.bass     = follow(bus.bass,     raw.bass,     0.35, 1.0, dt);
-    bus.lowMid   = follow(bus.lowMid,   raw.lowMid,   0.22, 0.7, dt);
-    bus.mid      = follow(bus.mid,      raw.mid,      0.15, 0.5, dt);
-    bus.presence = follow(bus.presence, raw.presence, 0.06, 0.35, dt);
-    bus.air      = follow(bus.air,      raw.air,      0.03, 0.22, dt);
-
-    // Spectral centroid → warmth. Normalised against a musically useful span
-    // rather than the full nyquist, which would sit near zero forever.
-    let num = 0, den = 0;
-    for (let i = 0; i < n; i++) { const v = f[i]; num += v * i; den += v; }
-    const centroidHz = den > 0 ? (num / den) * (nyquist / n) : 0;
-    const bright = Math.max(0, Math.min(1, (centroidHz - 200) / 4800));
-    // Temperament sets where the palette RESTS; the centroid only moves it from
-    // there. Mapping brightness straight onto warmth pins the field at full
-    // ember, and a body that is always hot has no warmth left to express.
-    bus.warmth = follow(bus.warmth, m.warmthBias + bright * 0.45, 3.0, 4.5, dt);
-
-    // Energy from RMS, with the long release that makes rest mean something.
-    A.getByteTimeDomainData(e.wave);
-    let acc = 0;
-    for (let i = 0; i < e.wave.length; i++) { const d = (e.wave[i] - 128) / 128; acc += d * d; }
-    const rms = Math.sqrt(acc / e.wave.length);
-    bus.energy = follow(bus.energy, Math.min(1, 0.10 + rms * 3.4), m.attack, m.release, dt);
+    readSpectrum(bus, dt, e.analyser, e.freq, e.wave, e.ctx.sampleRate, m);
 
     /* --- the payoff -----------------------------------------------------
        Events are already scheduled, so we know both what just happened and
@@ -873,7 +1032,68 @@ export class EngineDriver {
   }
 }
 
-const MODE_ENV = {
+/**
+ * Bands, warmth and energy from an analyser onto the Bus.
+ *
+ * Shared by EngineDriver and FilmDriver deliberately. These envelopes are the
+ * feel of the piece — a slow attack reads as anticipation, a long release as
+ * letting go — and a second copy of them would drift from this one the first
+ * time either was touched. A film has to move the way a session moves.
+ *
+ * @param {object} env  a MODE_ENV entry: {attack, release, warmthBias}
+ */
+export function readSpectrum(bus, dt, A, freq, wave, sampleRate, env) {
+  A.getByteFrequencyData(freq);
+  const f = freq;
+  const n = f.length;
+  const nyquist = sampleRate / 2;
+  const binOf = (hz) => Math.max(0, Math.min(n - 1, Math.round((hz / nyquist) * n)));
+
+  const band = (lo, hi) => {
+    const a = binOf(lo), b = binOf(hi);
+    let s = 0;
+    for (let i = a; i <= b; i++) s += f[i];
+    return (s / Math.max(1, b - a + 1)) / 255;
+  };
+
+  const raw = {
+    sub:      band(20, 60),
+    bass:     band(60, 180),
+    lowMid:   band(180, 500),
+    mid:      band(500, 1600),
+    presence: band(1600, 5000),
+    air:      band(5000, 14000),
+  };
+
+  // Bands keep their asymmetric envelopes: the analyser is already smoothed,
+  // but smoothing is not the same as shaping, and the shape is the feeling.
+  bus.sub      = follow(bus.sub,      raw.sub,      0.5,  1.4, dt);
+  bus.bass     = follow(bus.bass,     raw.bass,     0.35, 1.0, dt);
+  bus.lowMid   = follow(bus.lowMid,   raw.lowMid,   0.22, 0.7, dt);
+  bus.mid      = follow(bus.mid,      raw.mid,      0.15, 0.5, dt);
+  bus.presence = follow(bus.presence, raw.presence, 0.06, 0.35, dt);
+  bus.air      = follow(bus.air,      raw.air,      0.03, 0.22, dt);
+
+  // Spectral centroid → warmth. Normalised against a musically useful span
+  // rather than the full nyquist, which would sit near zero forever.
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { const v = f[i]; num += v * i; den += v; }
+  const centroidHz = den > 0 ? (num / den) * (nyquist / n) : 0;
+  const bright = Math.max(0, Math.min(1, (centroidHz - 200) / 4800));
+  // Temperament sets where the palette RESTS; the centroid only moves it from
+  // there. Mapping brightness straight onto warmth pins the field at full
+  // ember, and a body that is always hot has no warmth left to express.
+  bus.warmth = follow(bus.warmth, env.warmthBias + bright * 0.45, 3.0, 4.5, dt);
+
+  // Energy from RMS, with the long release that makes rest mean something.
+  A.getByteTimeDomainData(wave);
+  let acc = 0;
+  for (let i = 0; i < wave.length; i++) { const d = (wave[i] - 128) / 128; acc += d * d; }
+  const rms = Math.sqrt(acc / wave.length);
+  bus.energy = follow(bus.energy, Math.min(1, 0.10 + rms * 3.4), env.attack, env.release, dt);
+}
+
+export const MODE_ENV = {
   focus:    { attack: 2.6,  release: 5.5, warmthBias: 0.08 },
   bath:     { attack: 2.2,  release: 6.5, warmthBias: 0.18 },
   meditate: { attack: 1.8,  release: 4.0, warmthBias: 0.22 },

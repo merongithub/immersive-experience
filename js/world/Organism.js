@@ -15,6 +15,7 @@ import { Post } from "./Post.js";
 import { CameraRig } from "./CameraRig.js";
 import { Presence } from "../presence/Presence.js";
 import { Depth } from "../presence/Depth.js";
+import { Readout } from "./Readout.js";
 
 /* Per-temperament physics. Mode never changes what is on screen — only how
    eagerly it moves and how tightly it holds together. */
@@ -30,9 +31,16 @@ const TUNING = {
 };
 
 export class Organism {
-  constructor({ view, bus }) {
+  /**
+   * @param {object}  opts
+   * @param {object=} opts.film  capture mode: {width, height, pixelRatio}. Sets
+   *   the render size explicitly and LOCKS the adaptive downscaler — see
+   *   _adapt() for why leaving that running would ruin a take.
+   */
+  constructor({ view, bus, film = null }) {
     this.view = view;
     this.bus = bus;
+    this.film = film;
     this.mode = "meditate";
     this.tuning = TUNING.meditate;
     // Scratch object reused every frame by _descend; allocating a fresh tuning
@@ -63,9 +71,16 @@ export class Organism {
     });
     // 1.5 rather than 2: the particle load is fill-bound, and on a black field
     // the extra density buys almost nothing visible.
-    this._basePR = Math.min(devicePixelRatio, 1.5);
+    //
+    // A film sets both explicitly instead. Backing store is width × height ×
+    // pixelRatio, and that is exactly what canvas.captureStream() records, so
+    // the numbers you pass are the numbers you get regardless of the window.
+    this._basePR = this.film ? (this.film.pixelRatio || 1)
+                             : Math.min(devicePixelRatio, 1.5);
     r.setPixelRatio(this._basePR);
-    r.setSize(innerWidth, innerHeight);
+    // updateStyle false: the canvas keeps filling the window via CSS while the
+    // drawing buffer renders at film resolution.
+    r.setSize(this._w(), this._h(), !this.film);
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = 1.0;
     r.setClearColor(0x000000, 1);
@@ -78,7 +93,7 @@ export class Organism {
     this.clock = new THREE.Clock();
 
     // Far plane must clear the background star shell at r = 260, with margin.
-    this.camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 1200);
+    this.camera = new THREE.PerspectiveCamera(50, this._w() / this._h(), 0.5, 1200);
     this.camera.position.set(0, 55, 80);
     this.camera.lookAt(0, 0, 0);
   }
@@ -117,6 +132,19 @@ export class Organism {
 
   _initPost() {
     this.post = new Post(this.renderer, this.scene, this.camera);
+
+    /* A focus film turns the picture down in two specific ways, both because
+       motion and flicker in peripheral vision are what pull eyes off work. The
+       audio pulse and the camera drift are untouched; only their visible
+       amplitude changes. */
+    if (this.film) {
+      this.post.pulseAmount = this.film.visualPulse ?? 1;
+      this.rig.swing = this.film.swing ?? 1;
+      if (this.film.readout) {
+        this.readout = new Readout();
+        this.readout.setSize(this._w(), this._h());
+      }
+    }
   }
 
   /**
@@ -194,6 +222,7 @@ export class Organism {
     // Depth runs last of the three: it consumes the pokes the other two filed.
     this.presence.update(dt, bus);
     this.mic?.update(dt, bus);
+    this.guide?.update(dt, bus, this.mode);
     this.depth.update(dt, bus);
     this.trace?.update(dt, bus, this.mode);
 
@@ -207,6 +236,16 @@ export class Organism {
 
     this.post.render(dt);
 
+    // After the composite and BEFORE the capture, so the type is crisp in the
+    // file rather than bloomed, and present in it at all.
+    if (this.readout) {
+      this.readout.update(this.depth.info, bus.depth);
+      this.readout.render(this.renderer);
+    }
+
+    // One recorded frame per rendered frame, taken right after the composite.
+    this.capture?.frame();
+
     this._adapt(dt);
 
     if (this._resolveReady) {
@@ -217,8 +256,14 @@ export class Organism {
   }
 
   /* Drop render scale before dropping particle count: the field's silhouette is
-     the point, and a slightly softer image costs far less than a thinner body. */
+     the point, and a slightly softer image costs far less than a thinner body.
+
+     Locked while filming, and it has to be. A capture run sits under 42fps most
+     of the time, so this fires, drops the scale 18%, and then cannot climb back
+     because recovery needs 57fps — it ratchets down and stays there. The video
+     goes visibly soft a few minutes in and never recovers. */
   _adapt(dt) {
+    if (this.film) return;
     this._frameAvg += (dt - this._frameAvg) * 0.05;
     this._sinceCheck += dt;
     if (this._sinceCheck < 2.5) return;
@@ -239,11 +284,18 @@ export class Organism {
     }
   }
 
+  _w() { return this.film ? this.film.width : innerWidth; }
+  _h() { return this.film ? this.film.height : innerHeight; }
+
   _resize() {
-    this.camera.aspect = innerWidth / innerHeight;
+    // A film's frame size is fixed by the take, not by the window. Dragging the
+    // browser mid-recording must not change the shape of the video.
+    const w = this._w(), h = this._h();
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(innerWidth, innerHeight);
-    this.post.setSize(innerWidth, innerHeight);
+    this.renderer.setSize(w, h, !this.film);
+    this.post.setSize(w, h);
+    this.readout?.setSize(w, h);
   }
 
   destroy() {

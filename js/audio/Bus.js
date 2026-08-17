@@ -38,6 +38,7 @@ const SIGNALS = [
   "dwell",       // minutes held at full depth
   "away",        // 0..1 you are not looking at this
   "arrival",     // transient, fires on return
+  "pulse",       // 0..1 the isochronic entrainment pulse, ear and eye together
 ];
 
 /**
