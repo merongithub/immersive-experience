@@ -25,6 +25,13 @@
    anticipation                       an event is COMING — only a generative
                                       source can supply this; an mp3 cannot
    presenceAmt                        how much of YOU is in the field (M3)
+
+   voicePitch                         WHERE you are singing, not just how loud.
+                                      Loudness alone can only ever push; pitch
+                                      is what lets your voice choose a colour.
+   voiceAttack                        the moment a phrase STARTS, which a level
+                                      follower cannot give you — it is already
+                                      smoothed by the time it has risen.
 */
 
 const SIGNALS = [
@@ -33,6 +40,8 @@ const SIGNALS = [
   "tempo", "phase", "anticipation", "presenceAmt",
   "voice",       // your loudness, 0..1
   "voiced",      // how tonal it is — humming vs breathing
+  "voicePitch",  // 0..1 where in your range you are, log-scaled over ~3 octaves
+  "voiceAttack", // transient, fires when a phrase begins
   "depth",       // 0..1 how far into the session stillness has taken you
   "stillness",   // 0..1 how still you are right now
   "dwell",       // minutes held at full depth

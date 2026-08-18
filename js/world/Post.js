@@ -77,7 +77,18 @@ export class Post {
          band where photosensitive-epilepsy risk is highest, which is a
          different calculation for a video playing to strangers than for a piece
          on your own monitor. The AUDIO pulse is untouched. */
-      + bus.pulse * this.pulseAmount * (0.035 + bus.depth * 0.070);
+      + bus.pulse * this.pulseAmount * (0.035 + bus.depth * 0.070)
+
+      /* Your voice lifts the light.
+         Until now the only thing your voice reached was a force in the star
+         sim — it could move the field but never brighten it, so singing
+         stirred the galaxy without lighting it. This is the cheapest line in
+         the project and close to the most felt: hum, and the whole image
+         glows. The attack term puts the flare on the front of the phrase
+         rather than in the middle of it, which is where a voice actually has
+         its transient. */
+      + bus.voice * 0.34
+      + bus.voiceAttack * 0.16;
 
     this.fx.uniforms.uVignette.value = 1.15 + bus.depth * 0.55;
   }

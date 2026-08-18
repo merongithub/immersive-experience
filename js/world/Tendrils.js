@@ -220,6 +220,7 @@ const VEL_FRAG = /* glsl */ `
 
 export class Tendrils {
   constructor({ renderer, scene, spine, size = 384 }) {
+    this.spine = spine;    // the lanes are drawn against its pattern rotation
     this.size = size;
     this.count = size * size;
 
@@ -336,6 +337,17 @@ export class Tendrils {
       // so a mismatch here silently mis-paints the entire galaxy.
       uDiscRadius: { value: DISC.radius },
       uCoreRadius: { value: DISC.coreRadius },
+      uTime:   { value: 0 },
+      uVoice:  { value: 0 },
+      uVoicePitch: { value: 0.5 },
+      /* The lanes are cut from the same spiral the roots were laid out on, so
+         these MUST track Galaxy.js. A lane geometry that disagrees with the
+         arm geometry does not read as a near miss — it reads as a second,
+         wrong galaxy overlaid on the first. */
+      uPatternRot: { value: 0 },
+      uArmPitch:   { value: DISC.pitch },
+      uArms:       { value: DISC.arms },
+      uArmR0:      { value: DISC.coreRadius * 0.35 },
       // Additive brightness is a SUM over particles, so a denser tier is a
       // brighter image unless gain compensates. Normalising against a reference
       // count keeps the look identical from a 256 phone tier to a 512 desktop
@@ -353,14 +365,16 @@ export class Tendrils {
       vertexShader: /* glsl */ `
         ${NOISE_GLSL}
         uniform sampler2D uPos, uVel, uSeed;
-        uniform float uSize, uPixel, uEnergy, uBreath, uAir, uOnset;
+        uniform float uSize, uPixel, uEnergy, uBreath, uAir, uOnset, uTime;
         uniform float uDiscRadius, uCoreRadius;
+        uniform float uPatternRot, uArmPitch, uArms, uArmR0;
         attribute vec2 aRef;
         varying float vSpeed;
         varying float vRad;      // normalised galactic radius
         varying float vLife;
         varying float vSpark;
         varying float vNebula;   // nebula tint field sampled at the star
+        varying float vDust;     // 0..1 how deep in a lane the star sits
         varying float vCore;
 
         void main(){
@@ -380,7 +394,47 @@ export class Tendrils {
           // Nebula: a slow 3D noise field sampled in the disc plane. Cheaper and
           // far more convincing than billboard clouds, because it colours the
           // stars themselves rather than hazing over them.
-          vNebula = vnoise3(P.xyz * 0.045 + vec3(0.0, 0.0, 0.0));
+          //
+          // It DRIFTS, which it did not before. Sampled at a fixed point in
+          // world space the field was a birthmark: stars streamed through it
+          // for forty minutes and the pattern never once changed. Moving it —
+          // slowly enough that you cannot watch it happen — is the difference
+          // between a texture and weather.
+          vNebula = vnoise3(P.xyz * 0.045 + vec3(uTime * 0.006, uTime * 0.011, 0.0));
+
+          /* Dust lanes.
+             Real spiral galaxies carry their dust on the upstream edge of each
+             arm: gas piles into the density wave, and the dark band sits just
+             ahead of the bright one rather than on top of it. That offset is
+             most of what separates a galaxy from a spiral drawn in noise, and
+             it is why this is cut from the same log spiral Galaxy.js lays the
+             roots on rather than from a second field that merely looks similar.
+
+             The lanes are what the picture has been missing. Everything here
+             emits and nothing occludes, so the disc reads as an even smear;
+             one dark band in front of a bright arm is all it takes for the
+             eye to see one thing IN FRONT OF another, and depth is a far
+             stronger cue for mystery than any amount of colour. */
+          float th = atan(P.z, P.x) - uPatternRot;
+          float ridge = log(max(r, uArmR0 * 1.02) / uArmR0) / uArmPitch;
+          float k = 6.2831853 / uArms;
+          float d = th - ridge - 0.19;              // upstream of the ridge
+          d -= k * floor(d / k + 0.5);              // radians to the nearest lane
+
+          // Widens with radius, exactly as the arm scatter does — a lane of
+          // constant angular width would be a hairline at the rim.
+          float lw = 0.10 + 0.30 * vRad;
+          float lane = 1.0 - smoothstep(0.0, lw, abs(d));
+
+          // No lanes through the bulge, and none past the fraying rim: dust
+          // needs a disc to sit in, and the core has blown its own clear.
+          lane *= smoothstep(0.09, 0.34, vRad) * (1.0 - smoothstep(0.86, 1.25, vRad));
+
+          // Broken rather than continuous. An unbroken ribbon reads as a
+          // drawn line; real lanes are ragged and interrupted, and the same
+          // noise drifting through them keeps the raggedness from being fixed.
+          vDust = lane * (0.40 + 0.60 *
+            vnoise3(P.xyz * 0.085 + vec3(0.0, uTime * 0.010, 0.0)));
 
           // Only a scattered few stars twinkle, and only on air energy.
           float pick = step(0.90, fract(seed.b * 71.3 + floor(P.w * 90.0) * 0.618));
@@ -396,11 +450,13 @@ export class Tendrils {
         precision highp float;
         ${PALETTE_GLSL}
         uniform float uWarmth, uEnergy, uBreath, uGain;
+        uniform float uVoice, uVoicePitch;
         varying float vSpeed;
         varying float vRad;
         varying float vLife;
         varying float vSpark;
         varying float vNebula;
+        varying float vDust;
         varying float vCore;
 
         void main(){
@@ -413,16 +469,37 @@ export class Tendrils {
           // to be the most legible cue that this is a galaxy: old cool stars
           // crowd the bulge and read yellow-white, young hot ones live out in
           // the arms and read blue-violet.
-          float t = uWarmth + (1.0 - vRad) * 0.55 + vCore * 0.45 - vNebula * 0.30;
+          float t = uWarmth + (1.0 - vRad) * 0.55 + vCore * 0.45 - vNebula * 0.30
+          // Extinction reddens. Dust scatters blue light out of the line of
+          // sight and lets red through, which is why the stars you CAN still
+          // see through a lane are warmer than their neighbours. Real, free,
+          // and it stops the lanes from reading as flat grey paint.
+                  + vDust * 0.26;
 
-          // The nucleus is the one place allowed to reach bone white.
+          /* Your voice chooses a colour.
+             Loudness alone could only ever push the field around. Pitch gives
+             it somewhere to go: sing high and the galaxy cools toward violet
+             and reaches for bone, sing low and it warms toward ember. Centred
+             on 0.5 so the middle of your range is the piece's own colour and
+             you have to actually go somewhere to change it — and scaled by
+             uVoice, so it is silent when you are. */
+          float vp = (uVoicePitch - 0.5) * uVoice;
+          t -= vp * 0.55;
+
+          // The nucleus is the one place allowed to reach bone white — and a
+          // held high note, which is the one thing worth making an exception
+          // for.
           float heat = clamp(vCore * 0.70 + vSpark + vSpeed * 0.045
-                           + (1.0 - vRad) * 0.18 + uEnergy * 0.12, 0.0, 1.0);
+                           + (1.0 - vRad) * 0.18 + uEnergy * 0.12
+                           + max(0.0, vp) * 0.55, 0.0, 1.0);
           vec3 c = anima(t, heat * heat * 0.9);
 
-          // Dust lanes. Nebula noise both tints AND occludes, so the arms get
-          // dark veins through them instead of reading as an even smear.
-          float dust = 1.0 - smoothstep(0.52, 0.80, vNebula) * 0.55;
+          // Occlusion. The lanes do most of the work now and the nebula backs
+          // them up; a floor of 0.16 keeps a lane dark rather than empty,
+          // because stars vanishing outright reads as a hole in the geometry.
+          float dust = clamp(1.0 - vDust * 0.66
+                                 - smoothstep(0.60, 0.86, vNebula) * 0.26,
+                             0.16, 1.0);
 
           // Fray the rim rather than ending the disc at a hard circle.
           float edge = 1.0 - smoothstep(0.92, 1.35, vRad);
@@ -488,6 +565,12 @@ export class Tendrils {
     this.uniforms.uBreath.value = bus.breath;
     this.uniforms.uAir.value = bus.air;
     this.uniforms.uOnset.value = bus.onset;
+    this.uniforms.uTime.value = t;
+    this.uniforms.uVoice.value = bus.voice || 0;
+    this.uniforms.uVoicePitch.value = bus.voicePitch ?? 0.5;
+    // Read from the Galaxy rather than integrated here: two clocks for one
+    // rotation is how the lanes would slide off the arms over a long session.
+    this.uniforms.uPatternRot.value = this.spine.rotation;
   }
 
   dispose() {
