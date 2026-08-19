@@ -32,6 +32,12 @@
    voiceAttack                        the moment a phrase STARTS, which a level
                                       follower cannot give you — it is already
                                       smoothed by the time it has risen.
+   voiceBreath                        your own breathing, as a measured envelope
+                                      rather than a reconstructed phase. Paired
+                                      with voiceBreathAmt because a breath rate
+                                      takes three cycles to establish and
+                                      publishing a guess before then would have
+                                      the field follow noise.
 */
 
 const SIGNALS = [
@@ -42,6 +48,8 @@ const SIGNALS = [
   "voiced",      // how tonal it is — humming vs breathing
   "voicePitch",  // 0..1 where in your range you are, log-scaled over ~3 octaves
   "voiceAttack", // transient, fires when a phrase begins
+  "voiceBreath", // 0..1 YOUR breathing, measured rather than modelled
+  "voiceBreathAmt", // 0..1 how far the estimate can be trusted
   "depth",       // 0..1 how far into the session stillness has taken you
   "stillness",   // 0..1 how still you are right now
   "dwell",       // minutes held at full depth

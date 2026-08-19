@@ -42,6 +42,7 @@ export class Dust {
       uWarmth: { value: 0.4 },
       uEnergy: { value: 0 },
       uBreath: { value: 0 },
+      uVoice:  { value: 0 },
     };
 
     this.mat = new THREE.ShaderMaterial({
@@ -52,7 +53,7 @@ export class Dust {
       blending: THREE.AdditiveBlending,
       toneMapped: true,
       vertexShader: /* glsl */ `
-        uniform float uTime, uPixel, uBreath;
+        uniform float uTime, uPixel, uBreath, uVoice;
         attribute float aSeed;
         varying float vTw;
         varying float vMag;
@@ -64,7 +65,12 @@ export class Dust {
 
           // Slow, per-star twinkle, gently gathered by the breath.
           vTw = 0.30 + 0.70 * pow(0.5 + 0.5 * sin(uTime * (0.13 + aSeed * 0.5) + aSeed * 90.0), 2.0);
-          vTw *= 0.75 + 0.45 * uBreath;
+          /* The sky answers too. Without this the voice reaches the disc and
+             stops at its edge, so singing lit the galaxy and left the field it
+             sits in dead — and the shell is most of the frame. Half the
+             strength of the breath term: background stars should stir, not
+             flash, or the whole point of a quiet sky is spent. */
+          vTw *= 0.75 + 0.45 * uBreath + uVoice * 0.30;
           vMag = aSeed;
 
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
@@ -105,6 +111,7 @@ export class Dust {
     this.uniforms.uWarmth.value = bus.warmth;
     this.uniforms.uEnergy.value = bus.energy;
     this.uniforms.uBreath.value = bus.breath;
+    this.uniforms.uVoice.value = bus.voice || 0;
   }
 
   dispose() {

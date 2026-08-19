@@ -15,6 +15,20 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const RESUME_TIME = 1.6;  // longer than the city's 0.8: nothing here snaps
 
+/* How far the camera will hand its breathing over to yours once the mic has
+   established a rate. Not 1: the Engine's pacing layer is deliberately leading
+   you slower, and a camera locked entirely to the listener would follow them
+   back OUT of the deceleration the whole piece is built around. At 0.7 your
+   rhythm dominates and the piece still has a hand on the tiller.
+
+   POLARITY: `voiceBreath` peaks at the fullest part of YOUR cycle, which for
+   most people breathing audibly is the exhale — whereas the Engine's `breath`
+   peaks on the inhale. The camera eases closer as the value rises either way.
+   Whether "closer on your exhale" settles or unsettles is a question about
+   bodies rather than code, and it is the one number here that wants checking
+   by feel; flip the sign of BREATH_FOLLOW's use below if it reads wrong. */
+const BREATH_FOLLOW = 0.7;
+
 export class CameraRig {
   constructor({ camera, domElement, onMode }) {
     this.camera = camera;
@@ -112,9 +126,18 @@ export class CameraRig {
               + Math.sin(t * 0.047) * 0.06 * this.swing
               + bus.depth * 0.30;
 
-    // Closer on the inhale, and further out as the music builds so the whole
-    // structure comes into view on a swell.
-    const r = this.radius * (1.0 - bus.breath * 0.055 + bus.energy * 0.10);
+    /* Closer on the inhale, and further out as the music builds so the whole
+       structure comes into view on a swell.
+
+       Once the mic is confident about your rate, the breath the camera moves
+       on becomes YOURS. Blended rather than summed: two breath curves running
+       near each other would beat against one another at the difference of
+       their rates, which over a long sit is a slow wallowing that nothing on
+       screen explains. */
+    const br = bus.breath
+             + (bus.voiceBreath - bus.breath)
+               * (bus.voiceBreathAmt || 0) * BREATH_FOLLOW;
+    const r = this.radius * (1.0 - br * 0.055 + bus.energy * 0.10);
 
     return out.set(
       r * Math.sin(phi) * Math.cos(this.theta),

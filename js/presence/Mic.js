@@ -64,6 +64,10 @@ export class Mic {
     /* breath detection state */
     this._slow = 0;        // heavily smoothed envelope
     this._slower = 0;      // the baseline it is compared against
+    this.breath = 0;       // 0..1 the shape of your breathing, normalised
+    this.breathAmt = 0;    // 0..1 how far that shape can be trusted
+    this._bMin = 0;        // adaptive floor of the slow envelope
+    this._bMax = 0;        // adaptive ceiling
     this._wasAbove = false;
     this._lastCross = 0;
     this._periods = [];
@@ -351,6 +355,7 @@ export class Mic {
     this.shim = this.sub = null;
     this.level = this.bright = this.voiced = 0;
     this.pitch = this.pitchHz = this.clarity = this.attack = 0;
+    this.breath = this.breathAmt = this._bMin = this._bMax = 0;
     this.ring = null;
   }
 
@@ -451,6 +456,32 @@ export class Mic {
     this._slow += (this.level - this._slow) * (1 - Math.exp(-dt / 0.55));
     this._slower += (this._slow - this._slower) * (1 - Math.exp(-dt / 6.0));
 
+    /* --- the shape, not the level ---------------------------------------
+       `_slow` is the breath but it is also however loudly you happen to be
+       breathing, and a camera that leaned on it would follow your volume as
+       much as your rhythm. An adaptive normaliser fixes that: jump instantly
+       to a new extreme, forget it slowly. What comes out is the SHAPE — 0 at
+       the quietest point of your cycle and 1 at the fullest, whether you are
+       barely audible or sighing.
+
+       Measured, not modelled. Reconstructing a phase from the detected rate
+       was the alternative and it would have been a second breath curve running
+       near — but not exactly on — the real one, which is the failure Depth
+       already documents when it hands over to a film score. */
+    if (this._slow < this._bMin) this._bMin = this._slow;
+    else this._bMin += (this._slow - this._bMin) * (1 - Math.exp(-dt / 30));
+    if (this._slow > this._bMax) this._bMax = this._slow;
+    else this._bMax += (this._slow - this._bMax) * (1 - Math.exp(-dt / 30));
+
+    const span = this._bMax - this._bMin;
+    // Below this the "cycle" is mic noise being stretched across the full
+    // range, which would drive the field hard from nothing at all.
+    if (span > 0.012) {
+      const shape = (this._slow - this._bMin) / span;
+      this.breath += (Math.max(0, Math.min(1, shape)) - this.breath)
+                   * (1 - Math.exp(-dt / 0.30));
+    }
+
     const above = this._slow > this._slower * 1.06;
     if (above && !this._wasAbove) {
       const gap = this._t - this._lastCross;
@@ -478,6 +509,13 @@ export class Mic {
       this.engine.targetPeriod = own + (target - own) * 0.55;
     }
 
+    /* Trust, eased in over ~8 seconds once three cycles agree and eased out if
+       the crossings stop arriving. A camera that started following the moment
+       the third breath landed would visibly change what it was doing, and the
+       one thing this must not do is announce itself. */
+    const fresh = this._periods.length >= 3 && (this._t - this._lastCross) < 26;
+    this.breathAmt += ((fresh ? 1 : 0) - this.breathAmt) * (1 - Math.exp(-dt / 8));
+
     /* --- capture ------------------------------------------------------ */
     if (this.recording && this.ring) {
       const fresh = Math.min(this.time.length, Math.floor(dt * this.engine.ctx.sampleRate));
@@ -496,6 +534,8 @@ export class Mic {
     bus.voiced = this.voiced;
     bus.voicePitch = this.pitch;
     bus.voiceAttack = this.attack;
+    bus.voiceBreath = this.breath;
+    bus.voiceBreathAmt = this.breathAmt;
 
     // Speaking or singing is activity; quiet breathing is not — the threshold
     // sits above breath level on purpose, so someone breathing steadily with

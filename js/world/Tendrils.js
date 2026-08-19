@@ -56,6 +56,12 @@ const DISC_GLSL = /* glsl */ `
   }
 `;
 
+/* A ring crosses the disc in about three seconds and fades over three and a
+   half, so it is always most visible in the inner disc where it starts and has
+   thinned to nothing by the rim. */
+const WAVE_SPEED = 15.0;   // world units per second
+const WAVE_LIFE = 3.4;     // seconds from full to gone
+
 /** Body radius in world units. Shared by the sim and the render material — see
     the note on the render side's uRadius for why they must not drift apart. */
 const RADIUS = 5.0;
@@ -130,7 +136,10 @@ const VEL_FRAG = /* glsl */ `
   uniform sampler2D uSpine;
   uniform float uDt, uTime, uFlow, uNoiseScale, uBind, uSwirl, uDamp, uBreath, uOnset;
   uniform vec3 uAttract;
-  uniform float uAttractAmt, uVoice;
+  uniform float uAttractAmt, uVoice, uVoiced;
+  /* Travelling rings launched by phrase onsets: (radius, amplitude). Three,
+     so a quick phrase cannot cut off the ring the one before it started. */
+  uniform vec2 uWaves[3];
 
   void main(){
     vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -183,6 +192,12 @@ const VEL_FRAG = /* glsl */ `
            + curl(p * uNoiseScale * 2.7 * aniso + vec3(11.0, 4.0, uTime * 0.09)) * uFlow * 0.35;
     f.y *= 0.55;   // enough vertical stirring to keep the disc from flattening
 
+    /* Breath scatters. An airy input lifts the curl field, so an exhale frays
+       the arms where a hum tightens them — see the voice block below for the
+       other half of the same idea. Scaled by how UNvoiced the input is, so
+       this and the gathering term below can never both be at full strength. */
+    f *= 1.0 + uVoice * (1.0 - uVoiced) * 1.9;
+
     // --- core ------------------------------------------------------------
     // Inside the bulge, swap shear for a slow spheroidal churn, otherwise the
     // centre becomes a hard bright disc of stars all moving the same way.
@@ -205,12 +220,40 @@ const VEL_FRAG = /* glsl */ `
     float reach = smoothstep(0.0, 7.0, youDist) * (1.0 - smoothstep(6.0, 44.0, youDist));
     vec3 you = (toYou / youDist) * reach * uAttractAmt * 9.0;
 
-    // A sung note pushes outward everywhere rather than pulling to a point —
-    // the difference between being touched and being resonated through.
-    vec3 sung = normalize(vec3(rHat.x, p.y * 0.35, rHat.y)) * uVoice * 2.6
-              * (1.0 - smoothstep(0.2, 1.1, r / uDiscRadius));
+    /* --- your voice ---------------------------------------------------
+       A sung note pushes outward everywhere rather than pulling to a point —
+       the difference between being touched and being resonated through.
 
-    v += (orbit + rim + f + churn + you + sung + vec3(0.0, vertical, 0.0)) * uDt;
+       What is new is that TONE and BREATH now do opposite things, which is
+       the one piece of information the mic was already measuring and nothing
+       was reading. A hum is periodic, so it orders: the field draws inward and
+       flattens toward the plane, and the arms tighten. A whisper is broadband,
+       so it scatters: the turbulence lift above frays them instead. Nobody
+       needs this explained to them — you find it in about four seconds — and
+       that is the only kind of mapping worth having. */
+    float vFall = 1.0 - smoothstep(0.2, 1.1, r / uDiscRadius);
+    vec3 sung = normalize(vec3(rHat.x, p.y * 0.35, rHat.y)) * uVoice * 2.6 * vFall;
+
+    float gather = uVoice * uVoiced * vFall;
+    sung += vec3(-rHat.x, 0.0, -rHat.y) * gather * 1.6;   // draw in
+    sung.y -= p.y * gather * 1.3;                         // and flatten
+
+    /* --- the ring -----------------------------------------------------
+       A held note is a swell; a new note is an EVENT, and an event should be
+       something you can watch travel. Users said the field answers their
+       voice, and it did — but as a level, everywhere at once, which is a
+       response you feel rather than one you can follow. A ring leaving the
+       centre when you start a phrase is the same information made visible.
+
+       No branching: an empty slot has amplitude 0 and contributes nothing,
+       which is cheaper than a conditional on every particle. */
+    vec3 wave = vec3(0.0);
+    for (int i = 0; i < 3; i++) {
+      float hit = (1.0 - smoothstep(0.0, 3.6, abs(r - uWaves[i].x))) * uWaves[i].y;
+      wave += vec3(rHat.x, 0.0, rHat.y) * hit * 7.5;
+    }
+
+    v += (orbit + rim + f + churn + you + sung + wave + vec3(0.0, vertical, 0.0)) * uDt;
     v *= exp(-uDamp * uDt);
     v = clamp(v, vec3(-40.0), vec3(40.0));
 
@@ -305,6 +348,9 @@ export class Tendrils {
       uAttract:    { value: new THREE.Vector3() },
       uAttractAmt: { value: 0 },
       uVoice:      { value: 0 },
+      uVoiced:     { value: 0 },
+      uWaves:      { value: [new THREE.Vector2(), new THREE.Vector2(),
+                             new THREE.Vector2()] },
     });
 
     const err = gpu.init();
@@ -523,6 +569,33 @@ export class Tendrils {
     this.points = new THREE.Points(g, this.mat);
     this.points.frustumCulled = false;
     scene.add(this.points);
+
+    /* Ring slots, advanced on the CPU rather than held in a GPU texture: three
+       numbers do not need a render target, and keeping them here means the
+       radius is readable by anything else that ever wants it. */
+    this._waves = this.velVar.material.uniforms.uWaves.value;
+    this._waveSlot = 0;
+    this._prevAttack = 0;
+  }
+
+  /** Launch a ring from the centre. Called on a phrase onset. */
+  _launchWave() {
+    const w = this._waves[this._waveSlot];
+    this._waveSlot = (this._waveSlot + 1) % this._waves.length;
+    w.set(1.5, 1.0);      // radius, amplitude
+  }
+
+  /** Walk the rings outward and retire them at the rim. */
+  _stepWaves(dt) {
+    for (const w of this._waves) {
+      if (w.y <= 0) continue;
+      // ~3 seconds from core to rim. Slower reads as a pulse of brightness
+      // rather than as something moving; faster and it is gone before the eye
+      // has found it.
+      w.x += dt * WAVE_SPEED;
+      w.y -= dt / WAVE_LIFE;
+      if (w.y <= 0 || w.x > DISC.radius * 1.35) w.set(0, 0);
+    }
   }
 
   setPixelRatio(pr) { this.uniforms.uPixel.value = pr; }
@@ -555,6 +628,15 @@ export class Tendrils {
       vu.uAttractAmt.value = presence.force;
     }
     vu.uVoice.value = bus.voice || 0;
+    vu.uVoiced.value = bus.voiced || 0;
+
+    /* Edge-triggered, not level-triggered. `voiceAttack` decays over ~180 ms,
+       so testing the value alone would launch a ring every frame for a tenth
+       of a second and spend all three slots on one syllable. */
+    const att = bus.voiceAttack || 0;
+    if (att > 0.5 && this._prevAttack <= 0.5) this._launchWave();
+    this._prevAttack = att;
+    this._stepWaves(step);
 
     this.gpu.compute();
 

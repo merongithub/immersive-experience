@@ -221,7 +221,8 @@ export class Organism {
     // responding to where you were one frame ago on top of its own hesitation.
     // Depth runs last of the three: it consumes the pokes the other two filed.
     this.presence.update(dt, bus);
-    this.mic?.update(dt, bus);
+    if (this.mic) this.mic.update(dt, bus);
+    else this._releaseVoice(dt, bus);
     this.guide?.update(dt, bus, this.mode);
     this.depth.update(dt, bus);
     this.trace?.update(dt, bus, this.mode);
@@ -253,6 +254,33 @@ export class Organism {
       this._resolveReady = null;
       requestAnimationFrame(() => done());
     }
+  }
+
+  /**
+   * Ease the voice signals to rest when there is nobody on the mic.
+   *
+   * Mic is the only publisher of these, and it stops being ticked the moment
+   * the listener turns their voice off — which left every one of them frozen
+   * at whatever it held on the last frame, for the rest of the session. Turn
+   * the mic off mid-note and the field kept a permanent outward push, the
+   * readout sat at a level nobody was producing, and the camera went on
+   * breathing someone else's rhythm at full confidence.
+   *
+   * Faded rather than zeroed. A hard cut would snap the arms back the instant
+   * the button was pressed, and letting go of a note should look like letting
+   * go of it.
+   */
+  _releaseVoice(dt, bus) {
+    if (!bus.voice && !bus.voiceBreathAmt) return;   // already at rest
+    const k = 1 - Math.exp(-dt / 0.6);
+    bus.voice -= bus.voice * k;
+    bus.voiced -= bus.voiced * k;
+    bus.voiceAttack -= bus.voiceAttack * k;
+    // Trust decays first, so the breath curve is ignored before it is unwound
+    // — the reverse order would hand the camera a collapsing breath to follow.
+    bus.voiceBreathAmt -= bus.voiceBreathAmt * (1 - Math.exp(-dt / 0.35));
+    bus.voiceBreath -= (bus.voiceBreath - 0.5) * k;
+    bus.voicePitch -= (bus.voicePitch - 0.5) * k;   // back to the neutral hue
   }
 
   /* Drop render scale before dropping particle count: the field's silhouette is
