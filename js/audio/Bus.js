@@ -25,6 +25,14 @@
    anticipation                       an event is COMING — only a generative
                                       source can supply this; an mp3 cannot
    presenceAmt                        how much of YOU is in the field (M3)
+   strike                             what just sounded, at its true weight.
+                                      `onset` saturates at 1, so by the time it
+                                      reaches the world a gong and a bowl are
+                                      the same event — which is fine for a
+                                      bloom and useless for anything that must
+                                      happen only on the largest strike there
+                                      is. Published by both real drivers, so a
+                                      film keeps whatever it triggers.
 
    voicePitch                         WHERE you are singing, not just how loud.
                                       Loudness alone can only ever push; pitch
@@ -56,6 +64,7 @@ const SIGNALS = [
   "away",        // 0..1 you are not looking at this
   "arrival",     // transient, fires on return
   "pulse",       // 0..1 the isochronic entrainment pulse, ear and eye together
+  "strike",      // raw weight of the event that just sounded, UNclamped
 ];
 
 /**

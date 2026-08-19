@@ -19,6 +19,10 @@ import * as THREE from "three";
 import { GPUComputationRenderer } from "three/addons/misc/GPUComputationRenderer.js";
 import { NOISE_GLSL, PALETTE_GLSL } from "./shaders.js";
 import { DISC } from "./Galaxy.js";
+import { SESSION } from "./Seed.js";
+
+/** How many nebula regions the shader is compiled for. */
+const NEB = 3;
 
 /* Simulation size is chosen once at boot. Rebuilding the compute graph mid-run
    to chase a framerate costs more than it saves, so instead we pick a sane tier
@@ -140,6 +144,12 @@ const VEL_FRAG = /* glsl */ `
   /* Travelling rings launched by phrase onsets: (radius, amplitude). Three,
      so a quick phrase cannot cut off the ring the one before it started. */
   uniform vec2 uWaves[3];
+  /* A supernova shell: centre, and (radius, amount). Spherical from a point,
+     unlike uWaves which are rings about the galactic axis — ejecta does not
+     know where the centre of the galaxy is. */
+  uniform vec3 uNovaPos;
+  uniform vec2 uNova;
+  #define DISC_R_FADE 38.0
 
   void main(){
     vec2 uv = gl_FragCoord.xy / resolution.xy;
@@ -253,7 +263,19 @@ const VEL_FRAG = /* glsl */ `
       wave += vec3(rHat.x, 0.0, rHat.y) * hit * 7.5;
     }
 
-    v += (orbit + rim + f + churn + you + sung + wave + vec3(0.0, vertical, 0.0)) * uDt;
+    /* --- the shell ----------------------------------------------------
+       A shove outward from the detonation, sharply localised at the front so
+       the disc is pushed aside in a shell rather than swelling as a ball.
+       Falls off with distance as well, or the far side of the galaxy would
+       feel a nearby star exploding just as hard as its neighbours do. */
+    vec3 toNova = p - uNovaPos;
+    float novaD = length(toNova) + 1e-4;
+    float front = 1.0 - smoothstep(0.0, 5.0, abs(novaD - uNova.x));
+    vec3 nova = (toNova / novaD) * front * uNova.y * 26.0
+              * (1.0 - smoothstep(0.0, DISC_R_FADE, novaD));
+
+    v += (orbit + rim + f + churn + you + sung + wave + nova
+        + vec3(0.0, vertical, 0.0)) * uDt;
     v *= exp(-uDamp * uDt);
     v = clamp(v, vec3(-40.0), vec3(40.0));
 
@@ -262,7 +284,7 @@ const VEL_FRAG = /* glsl */ `
 `;
 
 export class Tendrils {
-  constructor({ renderer, scene, spine, size = 384 }) {
+  constructor({ renderer, scene, spine, size = 384, session = SESSION }) {
     this.spine = spine;    // the lanes are drawn against its pattern rotation
     this.size = size;
     this.count = size * size;
@@ -351,10 +373,35 @@ export class Tendrils {
       uVoiced:     { value: 0 },
       uWaves:      { value: [new THREE.Vector2(), new THREE.Vector2(),
                              new THREE.Vector2()] },
+      uNovaPos:    { value: new THREE.Vector3() },
+      uNova:       { value: new THREE.Vector2() },
     });
 
     const err = gpu.init();
     if (err) throw new Error(`GPU compute unavailable: ${err}`);
+
+    /* --- nebulae --------------------------------------------------------
+       Regions the stars travel THROUGH and take colour from, rather than
+       clouds drawn over the top of them. That distinction is the whole reason
+       this is three uniforms and not a set of billboards: a star inside the
+       region is tinted, a star in front of it is not, and the parallax between
+       them is what makes the disc read as having a volume. */
+    this.session = session;
+    this._nebPos = [];
+    this._nebColor = [];
+    this._nebParam = [];
+    for (let i = 0; i < NEB; i++) {
+      const n = session.nebulae[i];
+      this._nebPos.push(new THREE.Vector3());
+      this._nebColor.push(new THREE.Vector3(...(n ? n.rgb : [0, 0, 0])));
+      // An unused slot gets radius 0, which the falloff turns into a constant
+      // zero — cheaper and simpler than compiling a second shader per count.
+      // Radius 1 rather than 0 on an unused slot: smoothstep with edge0 equal
+      // to edge1 is undefined by the GLSL spec, and one NaN here would spread
+      // through the normalise below and take every star's colour with it.
+      this._nebParam.push(new THREE.Vector2(n ? n.radius : 1, n ? n.strength : 0));
+    }
+    this._nebulae = session.nebulae;
 
     /* --- render -------------------------------------------------------- */
     const g = new THREE.BufferGeometry();
@@ -394,6 +441,16 @@ export class Tendrils {
       uArmPitch:   { value: DISC.pitch },
       uArms:       { value: DISC.arms },
       uArmR0:      { value: DISC.coreRadius * 0.35 },
+      /* Nebula regions, seeded per session. Centre, colour, and (radius,
+         strength) — three arrays rather than one struct because uniform
+         structs are a portability question this project does not need to
+         have an opinion about. */
+      uNebPos:   { value: this._nebPos },
+      uNebColor: { value: this._nebColor },
+      uNebParam: { value: this._nebParam },
+      uNovaPos:  { value: new THREE.Vector3() },
+      uNova:     { value: new THREE.Vector2() },
+      uNovaFlash: { value: 0 },
       // Additive brightness is a SUM over particles, so a denser tier is a
       // brighter image unless gain compensates. Normalising against a reference
       // count keeps the look identical from a 256 phone tier to a 512 desktop
@@ -414,6 +471,12 @@ export class Tendrils {
         uniform float uSize, uPixel, uEnergy, uBreath, uAir, uOnset, uTime;
         uniform float uDiscRadius, uCoreRadius;
         uniform float uPatternRot, uArmPitch, uArms, uArmR0;
+        uniform vec3 uNovaPos;
+        uniform vec2 uNova;      // (radius, amount)
+        uniform float uNovaFlash;
+        uniform vec3 uNebPos[3];
+        uniform vec3 uNebColor[3];
+        uniform vec2 uNebParam[3];   // (radius, strength)
         attribute vec2 aRef;
         varying float vSpeed;
         varying float vRad;      // normalised galactic radius
@@ -421,6 +484,9 @@ export class Tendrils {
         varying float vSpark;
         varying float vNebula;   // nebula tint field sampled at the star
         varying float vDust;     // 0..1 how deep in a lane the star sits
+        varying vec3 vNebTint;   // colour of the region this star is inside
+        varying float vNebW;     // 0..1 how far inside it is
+        varying float vNova;     // 0..1 lit by the detonation
         varying float vCore;
 
         void main(){
@@ -482,12 +548,44 @@ export class Tendrils {
           vDust = lane * (0.40 + 0.60 *
             vnoise3(P.xyz * 0.085 + vec3(0.0, uTime * 0.010, 0.0)));
 
+          /* Which region is this star in, if any.
+             Flattened 3:1 through the disc, because a spherical region in a
+             disc this thin would be a ball intersecting a sheet — you would
+             see a circle, and a circle is the one shape that says "a function
+             drew this". Softened at the edge with the same noise field the
+             lanes use so the boundary is ragged rather than a rim. */
+          vNebTint = vec3(0.0);
+          vNebW = 0.0;
+          for (int i = 0; i < 3; i++) {
+            vec3 dv = (P.xyz - uNebPos[i]) * vec3(1.0, 3.0, 1.0);
+            float w = (1.0 - smoothstep(uNebParam[i].x * 0.25, uNebParam[i].x,
+                                        length(dv))) * uNebParam[i].y;
+            vNebTint += uNebColor[i] * w;
+            vNebW += w;
+          }
+          // Normalised, so two overlapping regions blend to a colour between
+          // them instead of summing into white.
+          vNebTint /= max(vNebW, 0.001);
+          vNebW = min(vNebW, 1.0) * (0.55 + 0.45 * vNebula);
+
+          /* Lit by the detonation. Two parts, because a supernova does two
+             things at very different times: the shell itself, which is
+             material being pushed and which glows where it is compressed, and
+             the flash, which for the first second lights EVERYTHING near it
+             the way a flashbulb lights a room. Without the second the event
+             reads as a ring appearing; with it, a star goes off. */
+          float nd = length(P.xyz - uNovaPos);
+          float shell = (1.0 - smoothstep(0.0, 6.0, abs(nd - uNova.x))) * uNova.y;
+          float lit = uNovaFlash * (1.0 - smoothstep(0.0, 26.0, nd));
+          vNova = min(1.0, shell + lit * 1.4);
+
           // Only a scattered few stars twinkle, and only on air energy.
           float pick = step(0.90, fract(seed.b * 71.3 + floor(P.w * 90.0) * 0.618));
           vSpark = pick * (uAir * 0.9 + uOnset * 0.8);
 
           vec4 mv = modelViewMatrix * vec4(P.xyz, 1.0);
-          float s = uSize * uPixel * (0.30 + 1.0 * seed.g) * (1.0 + vSpark * 2.4);
+          float s = uSize * uPixel * (0.30 + 1.0 * seed.g)
+                  * (1.0 + vSpark * 2.4 + vNova * 1.8);
           gl_PointSize = clamp(s * (1.0 / -mv.z), 0.7, 26.0);
           gl_Position = projectionMatrix * mv;
         }
@@ -503,6 +601,9 @@ export class Tendrils {
         varying float vSpark;
         varying float vNebula;
         varying float vDust;
+        varying vec3 vNebTint;
+        varying float vNebW;
+        varying float vNova;
         varying float vCore;
 
         void main(){
@@ -540,12 +641,32 @@ export class Tendrils {
                            + max(0.0, vp) * 0.55, 0.0, 1.0);
           vec3 c = anima(t, heat * heat * 0.9);
 
+          /* The regions bend the ramp; they do not replace it.
+             Multiplied rather than mixed toward a flat colour, so a star keeps
+             its own brightness and only its hue moves — a lerp would flatten
+             every star inside a region to the same value and the structure
+             would vanish exactly where the colour is most interesting. The
+             0.6 ceiling is the guard the palette comment asks for: the field
+             leans toward teal or gold and never actually leaves its key. */
+          c = mix(c, c * vNebTint * 1.7, clamp(vNebW, 0.0, 1.0) * 0.6);
+
           // Occlusion. The lanes do most of the work now and the nebula backs
           // them up; a floor of 0.16 keeps a lane dark rather than empty,
           // because stars vanishing outright reads as a hole in the geometry.
           float dust = clamp(1.0 - vDust * 0.66
                                  - smoothstep(0.60, 0.86, vNebula) * 0.26,
                              0.16, 1.0);
+
+          /* Dust near the core is LIT.
+             Everything in this piece emits and nothing is lit by anything, and
+             for stars that is fine — they are their own light. Dust is not,
+             and pure black dust is the giveaway that no light is being
+             modelled: in every photograph of a spiral the inner lanes glow
+             faintly, because there is an enormous bright nucleus a few
+             thousand parsecs away scattering off them. One term, falling off
+             with radius, and the lanes stop reading as holes punched in the
+             disc and start reading as something standing in front of it. */
+          float scatter = vDust * (1.0 - smoothstep(0.05, 0.62, vRad)) * 0.55;
 
           // Fray the rim rather than ending the disc at a hard circle.
           float edge = 1.0 - smoothstep(0.92, 1.35, vRad);
@@ -561,7 +682,18 @@ export class Tendrils {
                   * (0.30 + 1.15 * heat) * discLift
                   * (1.0 + vSpark * 7.0);
 
-          gl_FragColor = vec4(c * i, 1.0);
+          // Scattered light is warm and it is NOT the star's own colour — it
+          // is the nucleus, arriving second-hand.
+          vec3 lit = anima(0.85, 0.25) * scatter * sprite * vLife * edge * uGain
+                   * 0.075 * discLift;
+
+          /* The detonation runs white-hot — the one thing in the piece allowed
+             past the nucleus. It is added rather than mixed so it cannot be
+             dimmed by anything the star already is: a dust lane in front of a
+             supernova does not hide it. */
+          vec3 nova = anima(1.0, 1.0) * vNova * vNova * sprite * uGain * 1.5;
+
+          gl_FragColor = vec4(c * i + lit + nova, 1.0);
         }
       `,
     });
@@ -576,6 +708,26 @@ export class Tendrils {
     this._waves = this.velVar.material.uniforms.uWaves.value;
     this._waveSlot = 0;
     this._prevAttack = 0;
+
+    this._placeNebulae(0);
+  }
+
+  /**
+   * Walk the regions around the disc.
+   *
+   * Each on its own rate, so they separate over a long sit rather than turning
+   * together as one painted layer — which is what the old single noise field
+   * effectively was. Slow enough that you cannot watch it happen and fast
+   * enough that the galaxy is a different colour at minute forty than it was
+   * at minute five. That is the whole "altering" brief, and it costs three
+   * vector writes a frame.
+   */
+  _placeNebulae(t) {
+    for (let i = 0; i < this._nebulae.length; i++) {
+      const n = this._nebulae[i];
+      const a = n.angle + t * n.drift;
+      this._nebPos[i].set(Math.cos(a) * n.dist, n.height, Math.sin(a) * n.dist);
+    }
   }
 
   /** Launch a ring from the centre. Called on a phrase onset. */
@@ -600,7 +752,7 @@ export class Tendrils {
 
   setPixelRatio(pr) { this.uniforms.uPixel.value = pr; }
 
-  update(t, dt, bus, tuning, presence) {
+  update(t, dt, bus, tuning, presence, nova = null) {
     const pu = this.posVar.material.uniforms;
     const vu = this.velVar.material.uniforms;
 
@@ -642,17 +794,29 @@ export class Tendrils {
 
     this.uniforms.uPos.value = this.gpu.getCurrentRenderTarget(this.posVar).texture;
     this.uniforms.uVel.value = this.gpu.getCurrentRenderTarget(this.velVar).texture;
-    this.uniforms.uWarmth.value = bus.warmth;
+    // The session's resting colour, before the music moves it.
+    this.uniforms.uWarmth.value = bus.warmth + this.session.warmthBias;
     this.uniforms.uEnergy.value = bus.energy;
     this.uniforms.uBreath.value = bus.breath;
     this.uniforms.uAir.value = bus.air;
     this.uniforms.uOnset.value = bus.onset;
     this.uniforms.uTime.value = t;
+    this._placeNebulae(t);
     this.uniforms.uVoice.value = bus.voice || 0;
     this.uniforms.uVoicePitch.value = bus.voicePitch ?? 0.5;
     // Read from the Galaxy rather than integrated here: two clocks for one
     // rotation is how the lanes would slide off the arms over a long session.
     this.uniforms.uPatternRot.value = this.spine.rotation;
+
+    // The same numbers reach the sim and the render, so what is pushed is
+    // exactly what is lit.
+    if (nova) {
+      vu.uNovaPos.value.copy(nova.pos);
+      vu.uNova.value.set(nova.radius, nova.amount);
+      this.uniforms.uNovaPos.value.copy(nova.pos);
+      this.uniforms.uNova.value.set(nova.radius, nova.amount);
+      this.uniforms.uNovaFlash.value = nova.flash;
+    }
   }
 
   dispose() {

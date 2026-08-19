@@ -1015,6 +1015,9 @@ export class EngineDriver {
     this._lastFired = now;
     if (strike > 0) bus.onset = Math.min(1, bus.onset + 0.5 + 0.5 * strike);
     bus.onset = follow(bus.onset, 0, 0.02, 0.34, dt);
+    // The unclamped weight, held for one frame only. Anything reading this is
+    // looking for a specific KIND of event, not for a level.
+    bus.strike = strike;
 
     // Rises over the second before an event lands, then releases with it.
     bus.anticipation = follow(

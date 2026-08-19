@@ -19,6 +19,8 @@ import { Sigil } from "./session/Sigil.js";
 import { Capture } from "./session/Capture.js";
 import { renderFilm, writeWAV, measure } from "./session/Offline.js";
 import { FilmDriver } from "./audio/FilmDriver.js";
+import { applySession, sessionSeed } from "./world/Seed.js";
+import { seedDisc } from "./world/Galaxy.js";
 
 const view = document.getElementById("view");
 const boot = document.getElementById("boot");
@@ -91,6 +93,17 @@ const film = Q.get("film") ? {
   // temperament. A "sound bath" rendered in `meditate` is bells and no bowls.
   mode:       Q.get("mode") || null,
 } : null;
+
+/* The galaxy for this session, drawn before anything is built — Galaxy and
+   Tendrils both read the structure at construction, and a seed applied after
+   that point would give arms in one place and dust lanes in another.
+
+   A film pins it, or two takes of the same piece would be two different
+   galaxies and no note anywhere would say why. */
+const session = applySession(Q.get("seed") || sessionSeed());
+seedDisc(session);
+console.info(`[ANIMA] seed ${session.label} · ${session.arms} arms · `
+  + session.nebulae.map((n) => n.hue).join(", "));
 
 try {
   engine = new Engine("meditate");
@@ -312,6 +325,7 @@ if (organism) {
      The trace records; the sigil draws. Both are entirely local — the record
      lives in memory and only leaves if you export it yourself. */
   const trace = new Trace();
+  trace.seed = session.label;
   organism.trace = trace;
 
   const overlay = document.getElementById("sigil-overlay");
@@ -340,7 +354,8 @@ if (organism) {
   });
 
   document.getElementById("sigil-link")?.addEventListener("click", async (e) => {
-    const url = `${location.origin}${location.pathname}?s=${trace.encode()}`;
+    const url = `${location.origin}${location.pathname}`
+              + `?seed=${encodeURIComponent(session.label)}&s=${trace.encode()}`;
     try {
       await navigator.clipboard.writeText(url);
       e.target.textContent = "link copied";

@@ -142,6 +142,10 @@ export class FilmDriver {
     }
     if (strike > 0) bus.onset = Math.min(1, bus.onset + 0.5 + 0.5 * strike);
     bus.onset = follow(bus.onset, 0, 0.02, 0.34, dt);
+    // Matches EngineDriver exactly. A rendered film has the same events in the
+    // same places, so anything keyed to a particular strike must fire there
+    // too — otherwise the piece and the film of the piece are different works.
+    bus.strike = strike;
 
     // The payoff. `cursor` already points at the next event, so knowing what is
     // coming costs one array lookup.

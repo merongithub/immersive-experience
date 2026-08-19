@@ -16,6 +16,8 @@ import { CameraRig } from "./CameraRig.js";
 import { Presence } from "../presence/Presence.js";
 import { Depth } from "../presence/Depth.js";
 import { Readout } from "./Readout.js";
+import { Nova } from "./Nova.js";
+import { SESSION } from "./Seed.js";
 
 /* Per-temperament physics. Mode never changes what is on screen — only how
    eagerly it moves and how tightly it holds together. */
@@ -107,6 +109,12 @@ export class Organism {
       size: pickTier(),
     });
     this.dust = new Dust(this.scene);
+
+    /* Seeded from the session, so a given galaxy detonates in the same places
+       — which is what makes a shared seed a shared experience rather than the
+       same arms with different luck. */
+    this.nova = new Nova();
+    this.nova.useRng(SESSION.rng);
 
     this.tendrils.setPixelRatio(this._basePR);
     this.dust.setPixelRatio(this._basePR);
@@ -229,11 +237,16 @@ export class Organism {
 
     const tuning = this._descend(bus);
 
+    // Before the world reads it, so the frame a nova fires on is the frame it
+    // is visible on. Reading the Bus only, which is why a film detonates in
+    // the same places the live piece does.
+    this.nova.update(dt, bus);
+
     this.galaxy.update(t, dt, bus);
-    this.tendrils.update(t, dt, bus, tuning, this.presence);
+    this.tendrils.update(t, dt, bus, tuning, this.presence, this.nova);
     this.dust.update(t, dt, bus);
     this.rig.update(t, dt, bus);
-    this.post.update(t, dt, bus);
+    this.post.update(t, dt, bus, this.nova);
 
     this.post.render(dt);
 

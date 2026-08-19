@@ -51,7 +51,7 @@ export class Post {
     this.renderPass.camera = camera;
   }
 
-  update(t, dt, bus) {
+  update(t, dt, bus, nova = null) {
     this.fx.uniforms.uTime.value = t;
     this.fx.uniforms.uBreath.value = bus.breath;
     // Bloom swells with the body. Small range — past ~1.6 it stops reading as
@@ -88,7 +88,13 @@ export class Post {
          rather than in the middle of it, which is where a voice actually has
          its transient. */
       + bus.voice * 0.34
-      + bus.voiceAttack * 0.16;
+      + bus.voiceAttack * 0.16
+
+      /* A detonation blows the bloom open. This is the one moment the piece
+         is allowed to be loud in the eye — it happens perhaps twice in a long
+         deep session, and if it did not overwhelm the frame it would not be
+         worth having earned. The shell that follows is far gentler. */
+      + (nova ? nova.flash * 0.9 + nova.amount * 0.22 : 0);
 
     this.fx.uniforms.uVignette.value = 1.15 + bus.depth * 0.55;
   }
