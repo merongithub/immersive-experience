@@ -475,6 +475,7 @@ if (organism) {
        emits alongside keeps the visuals' foreknowledge intact — see FilmDriver
        for why that matters more than it sounds like it should. */
     let master = null;        // { buffer, score }
+    let takeLabel = "";       // what the running take actually contains
     let filmDriver = null;
     let playCtx = null;
 
@@ -613,6 +614,21 @@ if (organism) {
         // ffmpeg's -itsoffset when muxing the master back over the video.
         capture.leadIn = (performance.now() - capture.startedAt) / 1000;
 
+        /* State what is in this take, and keep stating it.
+           A rendered master plays in its own AudioContext and the mic lives in
+           the Engine's, so the two cannot meet: rendering a master and then
+           singing over it produces a take with none of your voice in it, and
+           nothing about the running recording would have said so. This is the
+           one mistake here that costs a whole take. */
+        takeLabel = filmDriver
+          ? (mic.enabled ? " · VOICE NOT RECORDED (master)" : " · master")
+          : (mic.enabled ? " · live + your voice" : " · live");
+        if (filmDriver && mic.enabled) {
+          console.warn("[ANIMA] recording a rendered master — the mic is in a "
+            + "different AudioContext and will NOT be in this take. Reload "
+            + "without rendering a master to film with your voice.");
+        }
+
         fRec.textContent = "stop";
         fRec.classList.add("is-rec");
         drawPlay();
@@ -660,7 +676,7 @@ if (organism) {
       // whether the take is worth keeping before you have watched it back.
       fRead.textContent =
         `${clock(s.seconds)} / ${film.minutes}:00 · ${s.fps.toFixed(1)} fps · `
-        + `${s.gb.toFixed(2)} GB${s.saved ? "" : " · in memory"}`;
+        + `${s.gb.toFixed(2)} GB${s.saved ? "" : " · in memory"}${takeLabel}`;
     }, 1000);
 
     // rAF halts in a hidden tab, which freezes breath and the pulse while the
