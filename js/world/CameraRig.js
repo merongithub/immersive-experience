@@ -15,6 +15,16 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const RESUME_TIME = 1.6;  // longer than the city's 0.8: nothing here snaps
 
+/* The film drift's window, in elevation ABOVE THE PLANE. The live drift's
+   whole trip is sinking from the grand spiral into the band-of-light view at
+   the plane — magnificent in a sit, wrong on film: over the first 20-minute
+   take it lived within ~10° of the plane and the disc read as a stretched
+   streak. Film holds the register where the spiral is actually on screen. */
+const FILM_ELEV_MIN = 25 * Math.PI / 180;
+const FILM_ELEV_MAX = 65 * Math.PI / 180;
+const FILM_ELEV_BASE = 45 * Math.PI / 180;
+const FILM_ELEV_SWING = 10 * Math.PI / 180;
+
 /* How far the camera will hand its breathing over to yours once the mic has
    established a rate. Not 1: the Engine's pacing layer is deliberately leading
    you slower, and a camera locked entirely to the listener would follow them
@@ -46,6 +56,12 @@ export class CameraRig {
        code editor it should be close to a held shot that drifts. */
     this.swing = 1;
     this._dt = 1 / 60;
+
+    /* The film camera. A different drift, not a tuning of the live one: the
+       live drift is built around the descent into the plane, and film needs
+       the opposite — a held register where the spiral stays on screen. */
+    this.cinema = false;
+    this._push = 0;   // 0..1 how far into a push toward the nucleus we are
 
     /* While a take is recording the camera is not for touching. A scroll on
        the page mid-take — the operator reaching for something else — handed
@@ -154,6 +170,59 @@ export class CameraRig {
     );
   }
 
+  /* The film drift. What the first film taught, applied:
+
+     ELEVATION IS HELD, NOT TOURED. ±10° on a cycle slower than most takes is
+     half a cycle of, clamped to 25–65° above the plane whatever swing and
+     depth ask for — so the spiral is on screen for the whole film instead of
+     almost never. Depth settles the shot a few degrees, and the clamp is what
+     lets it: the camera can lean toward the plane without ever reaching it.
+
+     THE ORBIT IS SLOWER than the eye can catch moving. On film, motion you
+     can see is motion YouTube's encoder has to spend its budget on.
+
+     THE PUSH-IN is the one event. Now and then the camera travels in to
+     dwell on the nucleus, then drifts back out — most of a minute each way,
+     a smoothstepped slow sine, so both ends are easings and nothing ever
+     cuts. The first lands a few minutes into a take; a second sine on an
+     incommensurate clock scales how deep each one goes, so some barely lean
+     in and some arrive, and none of it is a metronome. The aim wander stills
+     as the camera does; elevation stays clamped, so the push comes in over
+     the disc, never into it. */
+  _driftPointFilm(t, bus, out) {
+    const speed = (0.008 + bus.energy * 0.010) * (1 - bus.depth * 0.35);
+    this.theta += speed * this._dt;
+
+    const elev = THREE.MathUtils.clamp(
+      FILM_ELEV_BASE
+        + Math.sin(t * 0.0075) * FILM_ELEV_SWING * this.swing
+        + Math.sin(t * 0.019) * 0.02 * this.swing   // never quite repeats
+        - bus.depth * 0.10,
+      FILM_ELEV_MIN, FILM_ELEV_MAX
+    );
+    const phi = Math.PI / 2 - elev;
+
+    const pushWave = Math.sin(t * 0.011 - 1.2)
+                   * (0.78 + 0.22 * Math.sin(t * 0.0023 + 0.7));
+    this._push = THREE.MathUtils.smoothstep(pushWave, 0.82, 0.99);
+
+    // Breath still moves the radius — the camera breathing with the piece is
+    // its signature — but at half the live amplitude: on a fixed frame size
+    // there is no downscaler hiding small oscillations.
+    const br = bus.breath
+             + (bus.voiceBreath - bus.breath)
+               * (bus.voiceBreathAmt || 0) * BREATH_FOLLOW;
+    const r = this.radius
+            * (1.0 - br * 0.03 + bus.energy * 0.05)
+            * (1.0 - this._push * 0.45);
+
+    return out.set(
+      r * Math.sin(phi) * Math.cos(this.theta),
+      r * Math.cos(phi),
+      r * Math.sin(phi) * Math.sin(this.theta)
+    );
+  }
+
   update(t, dt, bus) {
     this._dt = dt;
 
@@ -163,15 +232,27 @@ export class CameraRig {
       return;
     }
 
-    const pos = this._driftPoint(t, bus, _v1);
+    const pos = this.cinema
+      ? this._driftPointFilm(t, bus, _v1)
+      : this._driftPoint(t, bus, _v1);
 
     // Aim a little off-centre, wandering — a locked centre reads as a tripod.
     // Scaled to the disc: at galactic size a two-unit wander is invisible.
-    const look = _v2.set(
-      Math.sin(t * 0.061) * 6.0,
-      Math.sin(t * 0.044) * 3.0,
-      Math.cos(t * 0.052) * 6.0
-    );
+    // On film the wander is slower and smaller — closer to a held shot — and
+    // it stills as a push-in arrives, so dwelling on the nucleus reads as
+    // deliberate rather than as the camera losing its aim.
+    const calm = this.cinema ? 1 - this._push * 0.75 : 1;
+    const look = this.cinema
+      ? _v2.set(
+          Math.sin(t * 0.017) * 4.0 * calm,
+          Math.sin(t * 0.012) * 2.0 * calm,
+          Math.cos(t * 0.015) * 4.0 * calm
+        )
+      : _v2.set(
+          Math.sin(t * 0.061) * 6.0,
+          Math.sin(t * 0.044) * 3.0,
+          Math.cos(t * 0.052) * 6.0
+        );
 
     if (this.mode === "resuming") {
       this._blend = Math.min(1, this._blend + dt / RESUME_TIME);

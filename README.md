@@ -201,7 +201,7 @@ alone. `&save=opfs` skips the save dialog: the take streams to the origin's
 private storage and is downloaded when it ends, so a long take can be started
 by a script and left alone.
 
-Three things film mode changes, each because it would otherwise ruin a take:
+Four things film mode changes, each because it would otherwise ruin a take:
 
 - **The adaptive downscaler is locked.** It drops render scale under 42fps and
   only recovers above 57, so a capture run ratchets it down and never recovers.
@@ -209,6 +209,14 @@ Three things film mode changes, each because it would otherwise ruin a take:
   the opening, descending across the body, surfacing again before the end. The
   live rule would reach full depth at five and a half minutes and sit there.
 - **Resolution is set outright**, rather than capped at window × 1.5.
+- **The camera is the film camera.** The live drift's whole trip is the
+  descent into the plane — the band-of-light view — and on the first film it
+  spent the take within ~10° of it, the disc a stretched streak, the spiral
+  almost never on screen. The film drift holds elevation between 25° and 65°
+  above the plane (±10° on a cycle slower than most takes), orbits below the
+  speed the eye catches, and every few hundred seconds pushes slowly in to
+  dwell on the nucleus before drifting back out — over the disc, never into
+  it. `&cam=drift` opts a take back into the live camera.
 
 Keep the tab visible. `requestAnimationFrame` halts in a hidden tab, which
 freezes breath and the pulse while the scheduler carries on playing bowls.

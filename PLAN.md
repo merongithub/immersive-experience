@@ -1,6 +1,6 @@
 # ANIMA — working plan
 
-Last updated 2026-08-29. This is the pick-up-where-we-left-off document: what is
+Last updated 2026-08-30. This is the pick-up-where-we-left-off document: what is
 done, what was decided, and what is next. The README describes the piece as it
 is; this describes where it is going.
 
@@ -11,7 +11,8 @@ is; this describes where it is going.
 
 ## Where things stand
 
-Branch `voice-and-mystery`, uncommitted work on top of `f9790f7`:
+Branch `voice-and-mystery` (the ear + converge/diverge + film hardening
+committed as `19a470b`):
 
 - **The ear (Phase 0 of creative-space) — done and validated.** `js/listen/`
   (`Source`, `Analysis`, `LiveDriver`) turns a mic'd instrument into Bus
@@ -54,9 +55,16 @@ Branch `voice-and-mystery`, uncommitted work on top of `f9790f7`:
 
 Order of work:
 
-1. **Film camera preset** (needed for both paths): elevation clamped ~25–65°,
-   ±10° swing on a very slow cycle, slower orbit, occasional slow push-in toward
-   the nucleus, never into the plane. Separate from the live drift.
+1. ~~**Film camera preset**~~ — done. `CameraRig._driftPointFilm`, on by
+   default in film mode (`&cam=drift` opts back into the live drift): elevation
+   held 25–65° above the plane (base 45°, ±10° on a ~14-min cycle, depth leans
+   it down a little, clamp catches everything), orbit at 0.46–1.03°/s (live is
+   1.03–2.75), push-in toward the nucleus (radius ×0.55, ~40 s each way) from a
+   smoothstepped 9.5-min sine whose depth a 45-min sine modulates — first one
+   lands ~4 min in; per simulated 20-min take roughly one full arrival, one
+   half-lean, one skip. Aim wander slower/smaller than live and stills as a
+   push arrives. Simulated 20 min: elevation 29.6–52.6°, radius 52–99.
+   **Not yet seen on screen.**
 2. **Film grade**: exposure floor ~0.75; static low-amplitude blue-noise dither
    instead of temporal grain; blacks lifted just off 0; star sprites ≥ ~2.5 px
    at 4K so they survive YouTube's downscale.
@@ -99,7 +107,6 @@ Planned files: `creative-space.html`, `css/creative.css`, `js/creative.js`,
 
 ## Loose ends
 
-- Commit the current work (nothing committed since `f9790f7`).
 - Test `?source=mic` with a real handpan or bowls; tune `sens`.
 - `?source=engine` hears the Engine's grain layer as strikes — documented, not
   a bug to chase.

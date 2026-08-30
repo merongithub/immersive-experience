@@ -98,6 +98,10 @@ const film = Q.get("film") ? {
   // photosensitivity risk in front of an audience. The AUDIO pulse stays.
   visualPulse: +(Q.get("vpulse") ?? 0),
   swing: Q.get("swing") !== null ? +Q.get("swing") : (_isFocus ? 0.35 : 1),
+  // &cam=drift opts a take back into the live drift camera. Anything else —
+  // including nothing — gets the film camera: held elevation, slower orbit,
+  // the occasional push-in.
+  cam: Q.get("cam") || "film",
   readout: (Q.get("readout") ?? (_session ? "1" : "0")) !== "0",
   width:      Math.max(256, +(Q.get("w") || 2560)),
   height:     Math.max(256, +(Q.get("h") || 1440)),

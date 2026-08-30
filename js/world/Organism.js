@@ -148,6 +148,10 @@ export class Organism {
     if (this.film) {
       this.post.pulseAmount = this.film.visualPulse ?? 1;
       this.rig.swing = this.film.swing ?? 1;
+      // Film gets the film camera unless the take explicitly asks for the
+      // live drift (&cam=drift) — the descent into the plane that drift is
+      // built around is exactly what ruined the first film's framing.
+      this.rig.cinema = this.film.cam !== "drift";
       if (this.film.readout) {
         this.readout = new Readout();
         this.readout.setSize(this._w(), this._h());
