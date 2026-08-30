@@ -188,6 +188,20 @@ body.is-descending #stillness-hint { opacity: 0; }
 
 @media (max-width: 767px) { #stillness-hint { display: none; } }
 
+/* The ear's one line: what it is listening to and what it just heard. Under
+   the stillness hint, and unlike the hint it stays — this is a test rig. */
+#listen {
+  position: absolute;
+  top: calc(var(--line) * 4.8);
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 200;
+  letter-spacing: 0.08ch;
+  white-space: nowrap;
+  user-select: none;
+}
+#listen.hover { cursor: pointer; }
+
 /* Voice. Sits above the mode list, in the same type as everything else. */
 #voice-panel {
   position: absolute;

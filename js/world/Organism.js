@@ -218,6 +218,40 @@ export class Organism {
     loop();
   }
 
+  /**
+   * Keep a take alive while the tab is hidden.
+   *
+   * requestAnimationFrame halts the moment a tab is covered — and on a Mac a
+   * window behind the terminal counts as covered — while the master plays on.
+   * The first twenty-minute take lost two minutes of picture to exactly that,
+   * with nothing on screen to say so. Audio does not stop in a hidden tab, so
+   * a processing node on the playback context is a clock that keeps ticking,
+   * and while rAF is asleep it drives the frame instead. Frames are paced to
+   * the film rate; when the tab is visible it does nothing at all.
+   *
+   * ScriptProcessorNode is deprecated and it is the right tool here: an
+   * AudioWorklet would need a second file fetched at runtime for a callback
+   * that only ever forwards a tick. 256 frames is ~5 ms at 48 kHz: frames can
+   * only land on callback boundaries, and at 512 the nearest boundary past a
+   * 60 fps period was 21 ms — a take paced at 47 fps, measured.
+   *
+   * @param {BaseAudioContext} ctx  the context the film's audio plays on
+   */
+  attachPacer(ctx) {
+    if (!this.film || !ctx || this._pacer) return;
+    const sp = ctx.createScriptProcessor(256, 1, 1);
+    const period = 1000 / this.film.fps;
+    let last = performance.now();
+    sp.onaudioprocess = () => {
+      if (this._disposed) return;
+      if (!document.hidden) { last = performance.now(); return; }
+      const now = performance.now();
+      if (now - last >= period - 1) { last = now; this._tick(); }
+    };
+    sp.connect(ctx.destination);   // silent; a node must be connected to run
+    this._pacer = sp;
+  }
+
   _tick() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
@@ -342,6 +376,7 @@ export class Organism {
   destroy() {
     this._disposed = true;
     cancelAnimationFrame(this.raf);
+    try { this._pacer?.disconnect(); } catch { /* already gone */ }
     removeEventListener("resize", this._onResize);
     this.rig?.dispose();
     this.presence?.dispose();

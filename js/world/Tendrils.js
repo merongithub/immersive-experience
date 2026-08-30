@@ -149,6 +149,8 @@ const VEL_FRAG = /* glsl */ `
      know where the centre of the galaxy is. */
   uniform vec3 uNovaPos;
   uniform vec2 uNova;
+  /* Signed, -1..1. Negative gathers the disc inward, positive spreads it. */
+  uniform float uConverge;
   #define DISC_R_FADE 38.0
 
   void main(){
@@ -263,6 +265,22 @@ const VEL_FRAG = /* glsl */ `
       wave += vec3(rHat.x, 0.0, rHat.y) * hit * 7.5;
     }
 
+    /* --- converge / diverge -------------------------------------------
+       The disc as one body drawing in and letting go. A strike spreads the
+       stars outward; quiet gathers them back. Both carry the same prograde
+       twist, so the motion is a fountain and a drain rather than a zoom —
+       stars leave along a spiral and return along one, which is the pattern
+       the eye reads as the galaxy doing something, not the camera.
+
+       Spared at the core, where the bulge has its own churn and a radial
+       push would hollow it into a ring, and faded at the rim, where the
+       disc already frays. Gentle by design: the piece is asked for peace and
+       excitement, and a field that lurches on every hit is neither. */
+    float cdFall = smoothstep(0.06, 0.30, r / uDiscRadius)
+                 * (1.0 - smoothstep(0.85, 1.25, r / uDiscRadius));
+    vec2 cdDir = normalize(rHat * uConverge + tHat * 0.55 * abs(uConverge) + vec2(1e-5));
+    vec3 cd = vec3(cdDir.x, 0.0, cdDir.y) * abs(uConverge) * 5.0 * cdFall;
+
     /* --- the shell ----------------------------------------------------
        A shove outward from the detonation, sharply localised at the front so
        the disc is pushed aside in a shell rather than swelling as a ball.
@@ -274,7 +292,7 @@ const VEL_FRAG = /* glsl */ `
     vec3 nova = (toNova / novaD) * front * uNova.y * 26.0
               * (1.0 - smoothstep(0.0, DISC_R_FADE, novaD));
 
-    v += (orbit + rim + f + churn + you + sung + wave + nova
+    v += (orbit + rim + f + churn + you + sung + wave + nova + cd
         + vec3(0.0, vertical, 0.0)) * uDt;
     v *= exp(-uDamp * uDt);
     v = clamp(v, vec3(-40.0), vec3(40.0));
@@ -375,6 +393,7 @@ export class Tendrils {
                              new THREE.Vector2()] },
       uNovaPos:    { value: new THREE.Vector3() },
       uNova:       { value: new THREE.Vector2() },
+      uConverge:   { value: 0 },
     });
 
     const err = gpu.init();
@@ -708,6 +727,7 @@ export class Tendrils {
     this._waves = this.velVar.material.uniforms.uWaves.value;
     this._waveSlot = 0;
     this._prevAttack = 0;
+    this._cd = 0;   // the converge/diverge state, eased
 
     this._placeNebulae(0);
   }
@@ -781,6 +801,20 @@ export class Tendrils {
     }
     vu.uVoice.value = bus.voice || 0;
     vu.uVoiced.value = bus.voiced || 0;
+
+    /* --- converge / diverge --------------------------------------------
+       Derived here from the Bus rather than published by a driver, so every
+       source — score, film, a handpan in the room — moves the disc the same
+       way. A strike is an outward release, quick to arrive and slow to let
+       go; between strikes the field gathers, more strongly the quieter it is
+       and a little on each inhale. The rest state is a gentle inward lean,
+       so a silent galaxy is one that is slowly closing its hand. */
+    const release = Math.min(1, (bus.onset || 0) * 1.1 + (bus.anticipation || 0) * 0.25);
+    const gather = 0.35 * (1 - bus.energy) + 0.20 * (bus.breath - 0.5);
+    const cdTarget = release - gather * (1 - release);
+    const cdTau = cdTarget > this._cd ? 0.12 : 1.8;
+    this._cd += (cdTarget - this._cd) * (1 - Math.exp(-step / cdTau));
+    vu.uConverge.value = Math.max(-1, Math.min(1, this._cd));
 
     /* Edge-triggered, not level-triggered. `voiceAttack` decays over ~180 ms,
        so testing the value alone would launch a ring every frame for a tenth

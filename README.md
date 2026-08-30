@@ -137,6 +137,50 @@ reached. Exportable as PNG, or as a ~320-character permalink.
 - `session` — open the sigil
 - `?p=512` — override the particle tier
 
+## Listening
+
+`?source=` hands the Bus to a `LiveDriver`: the field is driven by what the
+microphone **hears** rather than by the Engine's score. This is the ear for
+creative-space, proven on the galaxy first.
+
+```
+?source=mic                      the room — a handpan, a bowl, a voice
+?source=mic&accompany=1          the Engine plays under you; its own sound is
+                                 subtracted from what the mic hears and its
+                                 scheduled strikes are masked
+?source=file&url=take.wav        a recording, fetched — or drop one on the page
+?source=engine                   the built-in instrument, through the analysis
+                                 instead of the score
+&sens=0.6                        onset sensitivity, 0..1
+```
+
+What a live instrument gives that the Engine never needed to: `strike` and
+`onset` from **spectral flux** (a level follower misses a second hit inside the
+ring of the first; the spectrum does not), `noteClass` from what *changed* in
+the **chroma** at the strike (so a D over three ringing bowls still reads as a
+D), `chroma` and `hue` for colour, and — when the playing is rhythmic —
+`anticipation` from **inter-onset prediction**, which is the only route back to
+the pre-echo a file can never supply. Free-time bowl playing gets none, by
+design.
+
+Onsets are scored per bin as the *squared* rise above an adaptive knee, and
+only within 45 dB of the loudest thing heard recently — so a soft bowl is heard
+over a noise bed while a room's hiss is not an event however sharply it
+arrives. Strikes that arrive densely weigh less each, so a groove reads as
+rhythm rather than lightning. `?source=engine` will hear the Engine's own
+granular layer as a stream of small strikes; it is one, and there is nothing to
+subtract it against there. That mode is a plumbing check, not a benchmark.
+
+Pitch classes come from interpolated spectral peaks rather than bins: at 2048
+points a bin is 23 Hz wide and a semitone at D4 is 17, so a raw bin names the
+handpan's D a semitone wrong, reliably.
+
+| Piece | File |
+|---|---|
+| Source (mic / file / engine tap) | `js/listen/Source.js` |
+| Onset · chroma · note · tempo | `js/listen/Analysis.js` |
+| Publishing onto the Bus | `js/listen/LiveDriver.js` |
+
 ## Filming
 
 `?film=1` turns the piece into something being recorded rather than sat in.
@@ -153,7 +197,9 @@ Video comes off the canvas and audio off the Engine's compressor, into one
 `MediaRecorder`. Both from the same clock, so there is nothing to re-sync over
 an hour. Chunks stream to a file handle as they arrive rather than piling up in
 memory. The chrome is not in the recording — `captureStream` reads the canvas
-alone.
+alone. `&save=opfs` skips the save dialog: the take streams to the origin's
+private storage and is downloaded when it ends, so a long take can be started
+by a script and left alone.
 
 Three things film mode changes, each because it would otherwise ruin a take:
 

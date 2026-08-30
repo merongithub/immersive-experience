@@ -47,6 +47,14 @@ export class CameraRig {
     this.swing = 1;
     this._dt = 1 / 60;
 
+    /* While a take is recording the camera is not for touching. A scroll on
+       the page mid-take — the operator reaching for something else — handed
+       the whole remaining film to free look, parked ten units inside the disc
+       in a white wash, and film mode has no chrome to say so. The lock is set
+       by the take, not by film mode as such: auditioning a master should still
+       let you look around. */
+    this.locked = false;
+
     this.lookTarget = new THREE.Vector3(0, 0, 0);
     this._fromPos = new THREE.Vector3();
     this._fromLook = new THREE.Vector3();
@@ -80,7 +88,7 @@ export class CameraRig {
   }
 
   _enterFree() {
-    if (this.mode === "free") return;
+    if (this.locked || this.mode === "free") return;
     this._ensureControls();
     this.controls.target.copy(this.lookTarget);
     this.controls.enabled = true;

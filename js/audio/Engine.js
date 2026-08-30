@@ -850,7 +850,10 @@ export class Engine {
     this.cfg = VOICING[name];
     this.targetPeriod = PERIOD[name] ?? 11.0;
 
-    if (!this.ctx) return;
+    // A context is not a graph. Listening mode hands the Engine a context at
+    // boot so the mic can share it, and the graph is only built on start() —
+    // so until then there is nothing here to re-voice.
+    if (!this.ctx || !this.master) return;
     const t = this.ctx.currentTime;
     this.droneBus.gain.setTargetAtTime(this.cfg.droneGain, t, 2.0);
     this.grainBus.gain.setTargetAtTime(this.cfg.grainGain, t, 2.0);

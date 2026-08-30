@@ -21,6 +21,8 @@ import { renderFilm, writeWAV, measure } from "./session/Offline.js";
 import { FilmDriver } from "./audio/FilmDriver.js";
 import { applySession, sessionSeed } from "./world/Seed.js";
 import { seedDisc } from "./world/Galaxy.js";
+import { Source } from "./listen/Source.js";
+import { LiveDriver } from "./listen/LiveDriver.js";
 
 const view = document.getElementById("view");
 const boot = document.getElementById("boot");
@@ -61,8 +63,23 @@ const bus = new Bus();
    the frame size is fixed, the adaptive downscaler is locked, the chrome goes,
    and depth follows a scripted curve instead of your stillness.
 
-   ?film=1&w=2560&h=1440&mins=30&mbps=40&p=1024 */
+   ?film=1&w=2560&h=1440&mins=30&mbps=40&p=1024
+   &save=opfs  skip the save dialog; download the finished take instead */
 const Q = new URLSearchParams(location.search);
+
+/* ---------------------------------------------------------------- listening
+   ?source=mic|file|engine hands the Bus to a LiveDriver: the field is driven by
+   what the microphone HEARS rather than by the Engine's score. This is the
+   proving ground for creative-space — the same galaxy, a different ear.
+
+   ?source=file&url=take.wav        a recording, fetched (or dropped on the page)
+   ?source=mic&accompany=1          the Engine plays under you; its own sound is
+                                    subtracted from what the mic hears
+   ?source=engine                   listen to the built-in instrument through
+                                    the analysis instead of the score
+   &sens=0.6                        onset sensitivity, 0..1 */
+const SOURCE = Q.get("source");
+const ACCOMPANY = Q.get("accompany") === "1";
 
 /* Focus films default to a worked session and a calmed picture; a bath keeps
    the single long descent it was designed around. Every default is
@@ -108,6 +125,13 @@ console.info(`[ANIMA] seed ${session.label} · ${session.arms} arms · `
 try {
   engine = new Engine("meditate");
   bus.setDriver(new EngineDriver(engine));
+  /* One context for everything when listening: the mic, the file, and any
+     accompaniment share a clock and a sample rate, which the reference
+     subtraction depends on. Engine.start() adopts a context it already has. */
+  if (SOURCE) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) engine.ctx = new AC({ latencyHint: "interactive" });
+  }
 
   organism = new Organism({ view, bus, film });
   organism.setMode("meditate");
@@ -153,7 +177,86 @@ if (organism) {
   }
   drawVolume();
 
+  /* --- the ear ---
+     When a source is named, `begin` opens it instead of (or as well as) the
+     Engine, and the Bus is handed to the LiveDriver. Pausing suspends the
+     shared context, which stops everything on it at once. */
+  let source = null, live = null;
+  const listenEl = document.getElementById("listen");
+  const fileInput = document.getElementById("listen-file");
+
+  async function openSource(file = null) {
+    source = source || new Source(engine.ctx);
+    if (SOURCE === "engine" || ACCOMPANY) {
+      if (!engine.running) { await engine.start(); engine.setVolume(volume); }
+    }
+    if (SOURCE === "file") {
+      const url = Q.get("url");
+      if (!file && !url) { listenEl.textContent = "drop a recording here"; return false; }
+      await source.open("file", file ? { file } : { url });
+      source.setVolume(volume);
+    } else {
+      await source.open(SOURCE, { engine });
+    }
+    if (!live) {
+      live = new LiveDriver({ source, engine, mode: organism.mode });
+      live.accompany = ACCOMPANY;
+      if (Q.get("sens") !== null) live.sensitivity = Math.max(0, Math.min(1, +Q.get("sens")));
+      bus.setDriver(live);
+      window.__anima.live = live;
+    }
+    listenEl.textContent = `listening · ${source.label}`
+      + (ACCOMPANY ? " · accompanied" : "");
+    return true;
+  }
+
+  async function toggleListen() {
+    const ctx = engine.ctx;
+    if (source?.ready && ctx.state === "running") {
+      if (engine.running) await engine.pause();
+      await ctx.suspend();
+      play.textContent = "resume";
+      document.body.classList.remove("is-playing");
+      return;
+    }
+    play.textContent = "···";
+    await ctx.resume();
+    if (source?.ready) {
+      if (ACCOMPANY && !engine.running) { await engine.start(); engine.setVolume(volume); }
+    } else if (!(await openSource())) {
+      play.textContent = "begin";
+      return;
+    }
+    play.textContent = "pause";
+    document.body.classList.add("is-playing");
+  }
+
+  if (SOURCE) {
+    listenEl.hidden = false;
+    listenEl.textContent = SOURCE === "file" && !Q.get("url")
+      ? "drop a recording here" : `ready · ${SOURCE}`;
+    if (SOURCE === "file") {
+      listenEl.classList.add("hover");
+      listenEl.addEventListener("click", () => fileInput?.click());
+      fileInput?.addEventListener("change", async () => {
+        const f = fileInput.files?.[0];
+        if (f) { await engine.ctx.resume(); await openSource(f); play.textContent = "pause"; document.body.classList.add("is-playing"); }
+      });
+      addEventListener("dragover", (e) => e.preventDefault());
+      addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const f = e.dataTransfer?.files?.[0];
+        if (f) { await engine.ctx.resume(); await openSource(f); play.textContent = "pause"; document.body.classList.add("is-playing"); }
+      });
+    }
+  }
+
   async function toggle() {
+    if (SOURCE) {
+      try { await toggleListen(); }
+      catch (err) { console.error(err); play.textContent = "begin"; listenEl.textContent = err.message; }
+      return;
+    }
     try {
       if (engine.running) {
         await engine.pause();
@@ -178,6 +281,7 @@ if (organism) {
     b.addEventListener("click", () => {
       volume = Math.max(0, Math.min(1, volume + Number(b.dataset.vol) * 0.08));
       engine.setVolume(volume);
+      source?.setVolume(volume);
       drawVolume();
     });
   }
@@ -421,6 +525,15 @@ if (organism) {
       document.body.classList.toggle("is-descending", (bus.depth || 0) > 0.06);
       if (sessionTime) sessionTime.textContent = trace.summary().duration;
 
+      // What the ear just heard, while it is fresh. The class is only
+      // meaningful while `note` is still decaying, hence the gate.
+      if (live && source?.ready) {
+        const NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+        const n = bus.note > 0.15 && bus.noteClass >= 0 ? ` · ♪ ${NAMES[bus.noteClass]}` : "";
+        const tempo = bus.tempoConf > 0.3 ? ` · ${bus.tempo.toFixed(0)} bpm` : "";
+        listenEl.textContent = `listening · ${source.label}${ACCOMPANY ? " · accompanied" : ""}${n}${tempo}`;
+      }
+
       // Show the measured rate only once it is trustworthy — a number that
       // jitters every second reads as broken, however accurate it is.
       if (vRate && mic.enabled) {
@@ -451,6 +564,9 @@ if (organism) {
 
     const capture = new Capture({
       canvas: view, source: engine, bitrate: film.bitrate, fps: film.fps,
+      // &save=opfs: no save dialog, straight to private storage, downloaded at
+      // the end — a take that can be started by a script and left alone.
+      picker: Q.get("save") !== "opfs",
     });
     organism.capture = capture;
 
@@ -509,6 +625,7 @@ if (organism) {
         bus.setDriver(filmDriver);
         capture.source = filmDriver;
         organism.depth.external = true;   // the score owns depth now
+        organism.attachPacer(playCtx);    // the take survives a hidden tab
 
         const m = measure(master.buffer);
         const took = (performance.now() - t0) / 1000;
@@ -606,6 +723,7 @@ if (organism) {
             await toggle();
             if (!engine.running) { fRead.textContent = "audio would not start"; return; }
           }
+          organism.attachPacer(engine.ctx);
           organism.depth.scriptTo(film.minutes * 60, film.session);
         }
 
@@ -629,6 +747,11 @@ if (organism) {
             + "without rendering a master to film with your voice.");
         }
 
+        // The camera belongs to the drift for the length of the take. If it
+        // was in free look when record was pressed, it is released first.
+        if (organism.rig.mode !== "drift") organism.rig._resume();
+        organism.rig.locked = true;
+
         fRec.textContent = "stop";
         fRec.classList.add("is-rec");
         drawPlay();
@@ -643,6 +766,7 @@ if (organism) {
       fRec.classList.remove("is-rec");
       const out = await capture.stop();
       filmDriver?.stop();
+      organism.rig.locked = false;
       drawPlay();
       fRec.textContent = "record";
       if (out) {

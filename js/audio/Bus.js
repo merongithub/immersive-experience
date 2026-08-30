@@ -65,6 +65,17 @@ const SIGNALS = [
   "arrival",     // transient, fires on return
   "pulse",       // 0..1 the isochronic entrainment pulse, ear and eye together
   "strike",      // raw weight of the event that just sounded, UNclamped
+
+  /* --- a live instrument (LiveDriver) -----------------------------------
+     What a mic'd handpan or bowl gives that the Engine never needed to:
+     the Engine knows what it played; these are what we could HEAR. */
+  "hue",         // 0..1 where on the pitch-class circle the sound sits (C = 0)
+  "note",        // transient, fires when a NEW pitch class is struck
+  "noteClass",   // 0..11 which one — valid only while `note` is fresh; -1 = none
+  "tonal",       // 0..1 how peaked the chroma is: a note vs a wash vs noise
+  "tempoConf",   // 0..1 how sure the ear is about the pulse it is predicting
+  "beating",     // 0..1 the slow amplitude wobble of a singing bowl
+  "flow",        // 0..1 continuity of playing — creative-space's depth
 ];
 
 /**
@@ -150,6 +161,11 @@ export const MODES = {
 export class Bus {
   constructor() {
     for (const k of SIGNALS) this[k] = 0;
+    this.noteClass = -1;
+    /* Per pitch class, 0..1. The one non-scalar on the Bus: a chord is twelve
+       numbers and collapsing it to one would throw away exactly the information
+       that lets a struck D and a struck A be different colours. */
+    this.chroma = new Float32Array(12);
     this.warmth = 0.4;
     this.breath = 0;
     this.time = 0;
