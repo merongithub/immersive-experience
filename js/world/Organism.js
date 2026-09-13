@@ -118,6 +118,15 @@ export class Organism {
 
     this.tendrils.setPixelRatio(this._basePR);
     this.dust.setPixelRatio(this._basePR);
+    const grade = this.film?.grade;
+    if (grade) {
+      // Sprites in pixels of a 1080-line frame, so a 4K take holds the same
+      // stars a 1080 one does. Frame height, not width: the framing is set by
+      // the vertical field of view.
+      const scale = (this.film.height * (this.film.pixelRatio || 1)) / 1080;
+      this.tendrils.setFilmScale(scale, grade.minPx);
+      this.dust.setFilmScale(scale, grade.minPx);
+    }
 
     this.rig = new CameraRig({
       camera: this.camera,
@@ -139,7 +148,8 @@ export class Organism {
   }
 
   _initPost() {
-    this.post = new Post(this.renderer, this.scene, this.camera);
+    this.post = new Post(this.renderer, this.scene, this.camera,
+                         { grade: this.film?.grade });
 
     /* A focus film turns the picture down in two specific ways, both because
        motion and flicker in peripheral vision are what pull eyes off work. The
@@ -192,7 +202,16 @@ export class Organism {
     // Arrival briefly lifts everything back up, so returning is a greeting
     // rather than a jump-cut into whatever state you left.
     const lift = bus.arrival * 0.5;
-    this.renderer.toneMappingExposure = (1.0 - d * 0.55) * (1 + lift) * (1 - bus.away * 0.7);
+
+    /* A film has a floor. Live, full depth dims to 0.45, which is right in a
+       dark room with your eyes closed and near-black on a phone in daylight —
+       where most of a film's audience is. The descent is rescaled to land on
+       the floor rather than clamped at it: a clamp would reach it a third of
+       the way down and sit there, and the dimming is the shape of the piece. */
+    const floor = this.film?.grade?.floor ?? 0;
+    const dim = Math.min(0.55, 1 - floor);
+    this.renderer.toneMappingExposure = Math.max(floor,
+      (1.0 - d * dim) * (1 + lift) * (1 - bus.away * 0.7));
 
     return this._deep;
   }

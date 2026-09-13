@@ -1,5 +1,6 @@
 /**
- * Post — HDR composite: bloom, then grain/aberration/vignette, then output.
+ * Post — HDR composite: bloom, then grain/aberration/vignette, then output,
+ * then — on a film — the grade.
  *
  * The whole look depends on this. Every material in ANIMA writes values well
  * above 1.0 into a half-float target; bloom is what turns those into light.
@@ -13,10 +14,15 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { PostFXShader } from "./shaders.js";
+import { PostFXShader, FilmGradeShader } from "./shaders.js";
+import { blueNoiseTexture } from "./blueNoise.js";
 
 export class Post {
-  constructor(renderer, scene, camera) {
+  /**
+   * @param {object=} opts.grade  a film's grade — {lift, dither} in 8-bit
+   *   steps of the encoded output. Absent live.
+   */
+  constructor(renderer, scene, camera, { grade = null } = {}) {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
@@ -44,6 +50,19 @@ export class Post {
     this.composer.addPass(this.fx);
 
     this.composer.addPass(new OutputPass());
+
+    /* A film's grade goes after the output transform, so its dither lands on
+       the values that are about to be quantised — see FilmGradeShader. The
+       animated grain goes to zero: this does its anti-banding job, and does
+       it without handing the encoder a new field of noise every frame. */
+    if (grade) {
+      this.fx.uniforms.uGrain.value = 0;
+      this.grade = new ShaderPass(FilmGradeShader);
+      this.grade.uniforms.uNoise.value = blueNoiseTexture();
+      this.grade.uniforms.uLift.value = grade.lift / 255;
+      this.grade.uniforms.uDither.value = grade.dither / 255;
+      this.composer.addPass(this.grade);
+    }
   }
 
   setCamera(camera) {
@@ -106,5 +125,8 @@ export class Post {
     this.bloom.setSize(w, h);
   }
 
-  dispose() { this.composer.dispose?.(); }
+  dispose() {
+    this.grade?.uniforms.uNoise.value.dispose();
+    this.composer.dispose?.();
+  }
 }

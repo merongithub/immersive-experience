@@ -1,6 +1,6 @@
 # ANIMA — working plan
 
-Last updated 2026-08-30. This is the pick-up-where-we-left-off document: what is
+Last updated 2026-09-12. This is the pick-up-where-we-left-off document: what is
 done, what was decided, and what is next. The README describes the piece as it
 is; this describes where it is going.
 
@@ -65,9 +65,17 @@ Order of work:
    half-lean, one skip. Aim wander slower/smaller than live and stills as a
    push arrives. Simulated 20 min: elevation 29.6–52.6°, radius 52–99.
    **Not yet seen on screen.**
-2. **Film grade**: exposure floor ~0.75; static low-amplitude blue-noise dither
-   instead of temporal grain; blacks lifted just off 0; star sprites ≥ ~2.5 px
-   at 4K so they survive YouTube's downscale.
+2. ~~**Film grade**~~ — done, on by default in film mode (`&grade=0` for an
+   A/B). Exposure floor 0.75 (`&floor=`), the depth descent rescaled onto it;
+   `FilmGradeShader` after `OutputPass`: blacks at 2/255 plus a static
+   void-and-cluster blue-noise dither (±1/255, triangular, luma) replacing the
+   animated grain; sprites sized in 1080-line pixels with a 1.25 px floor
+   (2.5 px at 4K) and brightness compensation (`POINT_GLSL`). Measured in
+   headless Chrome: sprite light conserved to 0.3% across scales; a graded 4K
+   frame downscaled to 1080 carries 104% of a 1080 take's light, an ungraded
+   one 20% — **the 4K upload would have been a fifth as bright without this.**
+   Black renders as {1, 2, 3}/255 at 1:6:1, identical frame to frame.
+   **Not yet seen through an encoder** — check on the 1440p re-record.
 3. **Quick win**: re-record live at 2560×1440 with 1+2, `master.sh --live`,
    re-upload. The 1440p VP9 ladder alone transforms it.
 4. **Offline 4K renderer**: step the world at a fixed 1/60 s with the

@@ -61,7 +61,8 @@ driver and not one line of the world changes.
 | Spiral roots | `js/world/Galaxy.js` |
 | GPGPU star field | `js/world/Tendrils.js` |
 | Camera drift | `js/world/CameraRig.js` |
-| Bloom / grain / vignette | `js/world/Post.js` |
+| Bloom / grain / vignette / film grade | `js/world/Post.js` |
+| Blue-noise dither | `js/world/blueNoise.js` |
 | Session record | `js/session/Trace.js` |
 | Keepsake | `js/session/Sigil.js` |
 
@@ -201,7 +202,7 @@ alone. `&save=opfs` skips the save dialog: the take streams to the origin's
 private storage and is downloaded when it ends, so a long take can be started
 by a script and left alone.
 
-Four things film mode changes, each because it would otherwise ruin a take:
+Five things film mode changes, each because it would otherwise ruin a take:
 
 - **The adaptive downscaler is locked.** It drops render scale under 42fps and
   only recovers above 57, so a capture run ratchets it down and never recovers.
@@ -217,6 +218,24 @@ Four things film mode changes, each because it would otherwise ruin a take:
   speed the eye catches, and every few hundred seconds pushes slowly in to
   dwell on the nucleus before drifting back out — over the disc, never into
   it. `&cam=drift` opts a take back into the live camera.
+- **The picture is graded for an encoder and a phone.** `&grade=0` turns it
+  off for an A/B.
+  - *Exposure floor.* Depth dims live exposure to 0.45, near-black on a phone
+    in daylight. A film's descent is rescaled to land on `&floor=` (0.75)
+    rather than clamped there, so the dimming keeps its shape.
+  - *Star sprites in 1080-line pixels.* Live, a star is sized in device
+    pixels, so a 4K frame drew the same pixel-sized stars as a 1080 one and a
+    player's downscale left each a quarter as bright. Measured, an ungraded
+    4K frame averaged to 1080 carries a fifth of the light of a 1080 take; a
+    graded one is within 4%. The faintest sprites also get a floor of 1.25
+    reference pixels (2.5 at 4K), with their brightness scaled down to match,
+    so the same light is spread wide enough to survive the downscale.
+  - *Blacks two 8-bit steps off zero, and a static blue-noise dither* of one
+    step after the tone curve, in place of the animated grain. On black the
+    grain spread values over 0–25, in colour, different every frame — noise
+    an encoder cannot predict, spent as bitrate and returned as mush. The
+    dither is the same on every frame, in luma only, and sits on the pedestal
+    so neither half of it is clipped.
 
 Keep the tab visible. `requestAnimationFrame` halts in a hidden tab, which
 freezes breath and the pulse while the scheduler carries on playing bowls.

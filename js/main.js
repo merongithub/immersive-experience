@@ -64,7 +64,8 @@ const bus = new Bus();
    and depth follows a scripted curve instead of your stillness.
 
    ?film=1&w=2560&h=1440&mins=30&mbps=40&p=1024
-   &save=opfs  skip the save dialog; download the finished take instead */
+   &save=opfs  skip the save dialog; download the finished take instead
+   &grade=0    no film grade (see `grade` below); &floor=0.75 its exposure floor */
 const Q = new URLSearchParams(location.search);
 
 /* ---------------------------------------------------------------- listening
@@ -109,6 +110,19 @@ const film = Q.get("film") ? {
   minutes:    Math.max(1, +(Q.get("mins") || 30)),
   bitrate:    Math.max(1, +(Q.get("mbps") || 40)) * 1e6,
   fps:        Math.max(12, Math.min(120, +(Q.get("fps") || 60))),
+  /* The film grade: what a picture needs to survive an encoder and a phone,
+     which the piece on a monitor does not. An exposure floor under the depth
+     descent; blacks lifted `lift` 8-bit steps off zero and a static blue-noise
+     dither of `dither` steps in place of the animated grain; star sprites
+     sized in 1080-line pixels with a floor of `minPx`, so they survive a 4K
+     frame being averaged down to a phone. &grade=0 turns all of it off, for
+     an A/B against a take without it. */
+  grade: Q.get("grade") === "0" ? null : {
+    floor: Math.min(1, Math.max(0, +(Q.get("floor") ?? 0.75))),
+    lift: 2,
+    dither: 1,
+    minPx: 1.25,
+  },
   // The mode list lives in the chrome, and film mode hides the chrome — so
   // without this a film could only ever be rendered in the default
   // temperament. A "sound bath" rendered in `meditate` is bells and no bowls.
@@ -582,7 +596,8 @@ if (organism) {
       + (film.session
           ? ` · ${film.session.work / 60}/${film.session.brk / 60} pomodoro`
           : " · continuous")
-      + (film.visualPulse ? " · visual pulse ON" : "");
+      + (film.visualPulse ? " · visual pulse ON" : "")
+      + (film.grade ? "" : " · grade OFF");
 
     const clock = (s) =>
       `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;

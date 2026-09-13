@@ -17,7 +17,7 @@
 
 import * as THREE from "three";
 import { GPUComputationRenderer } from "three/addons/misc/GPUComputationRenderer.js";
-import { NOISE_GLSL, PALETTE_GLSL } from "./shaders.js";
+import { NOISE_GLSL, PALETTE_GLSL, POINT_GLSL } from "./shaders.js";
 import { DISC } from "./Galaxy.js";
 import { SESSION } from "./Seed.js";
 
@@ -440,6 +440,11 @@ export class Tendrils {
       uSeed:   { value: seedTex },
       uSize:   { value: 95.0 },
       uPixel:  { value: 1 },
+      // Sprite clamp, in pixels. uPtRef on uPtMin is the live look exactly;
+      // setFilmScale() moves all three. See POINT_GLSL.
+      uPtMin:  { value: 0.7 },
+      uPtMax:  { value: 26.0 },
+      uPtRef:  { value: 0.7 },
       uWarmth: { value: 0.4 },
       uEnergy: { value: 0 },
       uBreath: { value: 0 },
@@ -486,6 +491,7 @@ export class Tendrils {
       toneMapped: true,
       vertexShader: /* glsl */ `
         ${NOISE_GLSL}
+        ${POINT_GLSL}
         uniform sampler2D uPos, uVel, uSeed;
         uniform float uSize, uPixel, uEnergy, uBreath, uAir, uOnset, uTime;
         uniform float uDiscRadius, uCoreRadius;
@@ -605,7 +611,7 @@ export class Tendrils {
           vec4 mv = modelViewMatrix * vec4(P.xyz, 1.0);
           float s = uSize * uPixel * (0.30 + 1.0 * seed.g)
                   * (1.0 + vSpark * 2.4 + vNova * 1.8);
-          gl_PointSize = clamp(s * (1.0 / -mv.z), 0.7, 26.0);
+          gl_PointSize = pointSize(s * (1.0 / -mv.z));
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -624,6 +630,7 @@ export class Tendrils {
         varying float vNebW;
         varying float vNova;
         varying float vCore;
+        varying float vPtGain;
 
         void main(){
           vec2 d = gl_PointCoord - 0.5;
@@ -712,7 +719,7 @@ export class Tendrils {
              supernova does not hide it. */
           vec3 nova = anima(1.0, 1.0) * vNova * vNova * sprite * uGain * 1.5;
 
-          gl_FragColor = vec4(c * i + lit + nova, 1.0);
+          gl_FragColor = vec4((c * i + lit + nova) * vPtGain, 1.0);
         }
       `,
     });
@@ -771,6 +778,26 @@ export class Tendrils {
   }
 
   setPixelRatio(pr) { this.uniforms.uPixel.value = pr; }
+
+  /**
+   * Size the sprites for a film frame rather than for a screen.
+   *
+   * Live, a star's size is in device pixels, which is right for a monitor and
+   * wrong for a file: a 4K frame drew the same pixel-sized stars as a 1080 one,
+   * so after YouTube's downscale every star was half as wide and a quarter as
+   * bright, and the faintest fell below a pixel and shimmered out. Here size
+   * is in pixels of a 1080-line frame, and the floor keeps the faintest wide
+   * enough to survive being averaged down.
+   *
+   * @param {number} scale  frame height ÷ 1080
+   * @param {number} floor  smallest sprite, in reference pixels
+   */
+  setFilmScale(scale, floor) {
+    this.uniforms.uPixel.value = scale;
+    this.uniforms.uPtMin.value = floor * scale;
+    this.uniforms.uPtMax.value = 26.0 * scale;
+    this.uniforms.uPtRef.value = scale;
+  }
 
   update(t, dt, bus, tuning, presence, nova = null) {
     const pu = this.posVar.material.uniforms;
