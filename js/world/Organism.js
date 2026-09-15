@@ -18,6 +18,8 @@ import { Depth } from "../presence/Depth.js";
 import { Readout } from "./Readout.js";
 import { Nova } from "./Nova.js";
 import { SESSION } from "./Seed.js";
+import { Voyage, BODY } from "./Voyage.js";
+import { StarSystem } from "./StarSystem.js";
 
 /* Per-temperament physics. Mode never changes what is on screen — only how
    eagerly it moves and how tightly it holds together. */
@@ -133,6 +135,14 @@ export class Organism {
       domElement: this.view,
       onMode: (m) => this.onCameraMode?.(m),
     });
+
+    /* A film with somewhere to go — see Voyage. The camera flies it; the
+       place itself is drawn by StarSystem. */
+    this.voyage = this.film?.journey ? new Voyage() : null;
+    if (this.voyage) {
+      this.system = new StarSystem(this.scene, this.voyage);
+      this.rig.voyage = this.voyage;
+    }
 
     this.depth = new Depth();
     this.presence = new Presence({
@@ -294,6 +304,9 @@ export class Organism {
 
     const tuning = this._descend(bus);
 
+    // After Depth and the driver, which between them publish the film clock.
+    this.voyage?.update(t, dt, bus);
+
     // Before the world reads it, so the frame a nova fires on is the frame it
     // is visible on. Reading the Bus only, which is why a film detonates in
     // the same places the live piece does.
@@ -303,7 +316,8 @@ export class Organism {
     this.tendrils.update(t, dt, bus, tuning, this.presence, this.nova);
     this.dust.update(t, dt, bus);
     this.rig.update(t, dt, bus);
-    this.post.update(t, dt, bus, this.nova);
+    if (this.voyage) this._closeUp(t, dt, bus);
+    this.post.update(t, dt, bus, this.nova, this._close || 0);
 
     this.post.render(dt);
 
@@ -324,6 +338,38 @@ export class Organism {
       this._resolveReady = null;
       requestAnimationFrame(() => done());
     }
+  }
+
+  /**
+   * What changes when the camera is among the stars rather than above them.
+   *
+   * Star sprites resolve into points and the nearest clear away (see
+   * Tendrils.setCloseUp); the near plane comes in with the camera, from the
+   * half unit that is plenty for a galaxy to the few hundredths a world
+   * three tenths of a unit wide needs. And the bodies are told how big a
+   * pixel is, so the star knows whether it is a disc yet or still a glint.
+   */
+  _closeUp(t, dt, bus) {
+    const v = this.voyage, cam = this.camera;
+    const dStar = cam.position.distanceTo(v.star);
+    const dWorld = cam.position.distanceTo(v.planet);
+
+    const k = Math.min(1, Math.max(0, (22 - dStar) / (22 - 8)));
+    const closeness = k * k * (3 - 2 * k);
+    this.tendrils.setCloseUp(closeness, closeness * 2.8);
+    this._close = closeness;
+
+    const nearest = Math.min(dStar - BODY.starRadius,
+                             dWorld - BODY.planetRadius * 2.6);   // ring's edge
+    const near = Math.min(0.5, Math.max(0.02, nearest * 0.3));
+    if (Math.abs(cam.near - near) > near * 0.01) {
+      cam.near = near;
+      cam.updateProjectionMatrix();
+    }
+
+    const H = this.renderer.getDrawingBufferSize(_size).y;
+    const pxPerUnit = (H / 2) / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+    this.system.update(t, dt, bus, cam, pxPerUnit, H / 1080);
   }
 
   /**
@@ -408,7 +454,10 @@ export class Organism {
     this.galaxy?.dispose();
     this.tendrils?.dispose();
     this.dust?.dispose();
+    this.system?.dispose();
     this.post?.dispose();
     this.renderer.dispose();
   }
 }
+
+const _size = new THREE.Vector2();

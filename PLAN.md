@@ -87,6 +87,28 @@ Order of work:
 5. Later: HDR (HLG 10-bit) upload — YouTube gives it its own ladder and the
    bloom would glow; Chrome's 10-bit WebCodecs path is shaky, so phase two.
 
+## The journey (2026-09-12) — built, not yet committed
+
+Request: "take a trip to the galaxy … zoom into a particular planet or star so
+we can build a story." `Voyage` (where and when) + `StarSystem` (the bodies) +
+`CameraRig._voyage` (three poses joined by log-distance flights). Five
+chapters on the film clock: overture (a glint that answers strikes) →
+approach → the star → the world (daylight → terminator → night side, star at
+the limb at the deepest point) → return → coda. First feedback (same day):
+the textured sun read as a fireball pasted onto the galaxy and the world was
+out of proportion — so the star became light (a point in a halo, no surface)
+inside a mote disc that repeats the galaxy at small scale (Kepler orbits,
+seeded rings, a lane at the world's orbit, strike waves), and the world shot
+pulled back to a quarter of the frame. On by default in film mode
+except focus; `&journey=0`, `&at=` for auditioning. Tuned from headless stills
+across three seeds (teal/ringed, magenta, gold): bloom eased back in close-up
+(UnrealBloom's widest kernels are truncated at 1σ → square halo on a lit
+disc), star held at ~0.55 HDR so its surface survives. **Not yet seen moving
+or with the music**; the glint's answer to strikes can only be judged with
+audio. Live piece unchanged (journey is film-only for now — a depth-driven
+live version, "be still and you are carried to a world", is the obvious
+next step if wanted).
+
 ## Next: creative-space (the derivative)
 
 Decisions (2026-08-29):

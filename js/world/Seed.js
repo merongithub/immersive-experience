@@ -43,6 +43,18 @@ export function makeRng(a) {
   };
 }
 
+/**
+ * A second seeded stream for one purpose, off the same session.
+ *
+ * Anything added after the fact draws from its own stream rather than from
+ * session.rng — which Nova reads lazily, at detonation time — or every
+ * existing seed would start detonating somewhere new the moment a feature
+ * was added that took a few numbers first.
+ */
+export function makeStream(session, name) {
+  return makeRng(hashString(`${session.label}/${name}`));
+}
+
 /** Fold a string into a 32-bit integer. */
 function hashString(s) {
   let h = 2166136261;

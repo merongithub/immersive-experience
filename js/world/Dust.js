@@ -52,7 +52,7 @@ export class Dust {
       uniforms: this.uniforms,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,   // see Tendrils — a world in front hides the sky
       blending: THREE.AdditiveBlending,
       toneMapped: true,
       vertexShader: /* glsl */ `

@@ -128,6 +128,9 @@ export class FilmDriver {
     bus.pulse = this._track(this.pulse, t);
     bus.depth = this._track(this.depth, t);
     bus.stillness = 1;
+    // The playhead is the film's clock here, as it is depth's.
+    bus.filmT = t;
+    bus.filmLen = this.score.duration;
 
     bus.breathVel = (bus.breath - this.prevBreath) / Math.max(dt, 1e-4);
     this.prevBreath = bus.breath;

@@ -445,6 +445,9 @@ export class Tendrils {
       uPtMin:  { value: 0.7 },
       uPtMax:  { value: 26.0 },
       uPtRef:  { value: 0.7 },
+      // Stars within this many units of the camera fade out. 0 = off, which
+      // is always, unless a journey has brought the camera into the disc.
+      uNearFade: { value: 0 },
       uWarmth: { value: 0.4 },
       uEnergy: { value: 0 },
       uBreath: { value: 0 },
@@ -486,12 +489,17 @@ export class Tendrils {
       uniforms: this.uniforms,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      // Tested, not written: nothing in the field writes depth, so among the
+      // stars this changes nothing — but a world a journey arrives at is
+      // solid, and the stars behind it have to be behind it.
+      depthTest: true,
       blending: THREE.AdditiveBlending,
       toneMapped: true,
       vertexShader: /* glsl */ `
         ${NOISE_GLSL}
         ${POINT_GLSL}
+        uniform float uNearFade;
+        varying float vNear;
         uniform sampler2D uPos, uVel, uSeed;
         uniform float uSize, uPixel, uEnergy, uBreath, uAir, uOnset, uTime;
         uniform float uDiscRadius, uCoreRadius;
@@ -612,6 +620,8 @@ export class Tendrils {
           float s = uSize * uPixel * (0.30 + 1.0 * seed.g)
                   * (1.0 + vSpark * 2.4 + vNova * 1.8);
           gl_PointSize = pointSize(s * (1.0 / -mv.z));
+          vNear = uNearFade > 0.0
+            ? smoothstep(uNearFade * 0.35, uNearFade, -mv.z) : 1.0;
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -631,6 +641,7 @@ export class Tendrils {
         varying float vNova;
         varying float vCore;
         varying float vPtGain;
+        varying float vNear;
 
         void main(){
           vec2 d = gl_PointCoord - 0.5;
@@ -719,7 +730,7 @@ export class Tendrils {
              supernova does not hide it. */
           vec3 nova = anima(1.0, 1.0) * vNova * vNova * sprite * uGain * 1.5;
 
-          gl_FragColor = vec4((c * i + lit + nova) * vPtGain, 1.0);
+          gl_FragColor = vec4((c * i + lit + nova) * vPtGain * vNear, 1.0);
         }
       `,
     });
@@ -797,6 +808,28 @@ export class Tendrils {
     this.uniforms.uPtMin.value = floor * scale;
     this.uniforms.uPtMax.value = 26.0 * scale;
     this.uniforms.uPtRef.value = scale;
+  }
+
+  /**
+   * Inside the disc, stars are points.
+   *
+   * A sprite is sized in world units, which is right from outside — each one
+   * stands for a cluster, and they should swell as you lean in. Flown INTO,
+   * the same rule makes every star within a few units a 26-pixel disc, and a
+   * few thousand of them wash the frame white: the first film's free look,
+   * parked inside the disc, was exactly that. So as the camera closes on a
+   * body the ceiling comes down toward a few pixels — near stars resolve into
+   * points, the way stars do — and the nearest fade out entirely, so nothing
+   * streaks across the lens.
+   *
+   * @param {number} closeness  0 from outside the disc, 1 at a body
+   * @param {number} nearFade   world units around the camera that clear
+   */
+  setCloseUp(closeness, nearFade) {
+    const px = this.uniforms.uPixel.value;
+    const k = Math.max(0, Math.min(1, closeness));
+    this.uniforms.uPtMax.value = px * (26.0 + (3.2 - 26.0) * k);
+    this.uniforms.uNearFade.value = nearFade;
   }
 
   update(t, dt, bus, tuning, presence, nova = null) {

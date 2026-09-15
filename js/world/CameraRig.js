@@ -63,6 +63,12 @@ export class CameraRig {
     this.cinema = false;
     this._push = 0;   // 0..1 how far into a push toward the nucleus we are
 
+    /* A film's journey, if it has one — see Voyage. The drift keeps running
+       underneath it the whole time: the journey leaves from wherever the
+       drift has got to and returns to wherever it has got to since, so there
+       is never a moment the camera is being put back. */
+    this.voyage = null;
+
     /* While a take is recording the camera is not for touching. A scroll on
        the page mid-take — the operator reaching for something else — handed
        the whole remaining film to free look, parked ten units inside the disc
@@ -223,6 +229,70 @@ export class CameraRig {
     );
   }
 
+  /* The journey, as three held shots and the flights between them.
+
+     THE STAR: far enough out to hold its whole disc, 28° above the disc's
+     own plane — measured from the disc, not the galaxy, or a seed with a
+     tilted system would see it edge-on — and on the side away from the
+     nucleus, so the galaxy's core glows behind it. Aimed a touch toward the
+     core, so the star sits off-centre and the home it came from is in the
+     frame with it. A slow creep around it, and the breath still moves the
+     distance.
+
+     THE WORLD: `night` walks the camera round the planet. At 0 it is 77°
+     off the star's line — the day side, a broad lit crescent of oceans and
+     cloud, the star out of frame behind the camera's shoulder. At 1 it is
+     11° off, on the night side looking back at the world with the star just
+     at its limb and partly behind it — never all the way; the angle stops
+     short. The aim leans toward the star only as the star comes into frame,
+     so both are composed together.
+
+     Each is posed around a FOCUS — what it is orbiting — and `_flight`
+     moves between poses by distance from the focus rather than by position,
+     which is what makes them powers-of-ten flights instead of straight
+     lines. Composed in order, galaxy → star → world → galaxy, and since a
+     flight at 0 is its start and at 1 its end, the chain is only ever doing
+     one move at a time. */
+  _voyage(t, bus, pos, look) {
+    const v = this.voyage, s = v.star, p = v.planet;
+
+    _G.pos.copy(pos); _G.look.copy(look); _G.focus.copy(look);
+
+    const br = bus.breath
+             + (bus.voiceBreath - bus.breath)
+               * (bus.voiceBreathAmt || 0) * BREATH_FOLLOW;
+    const n = v.normal;
+    // Outward from the nucleus, laid into the disc's plane, then turned a
+    // little way round it.
+    _e.set(s.x, 0, s.z).normalize();
+    _e.addScaledVector(n, -_e.dot(n)).normalize();
+    _e.applyAxisAngle(n, 0.55 + t * 0.006);
+    const el = 0.49;
+    _S.focus.copy(s);
+    _S.pos.copy(_e).multiplyScalar(Math.cos(el)).addScaledVector(n, Math.sin(el))
+      .multiplyScalar(STAR_DIST * (1 - br * 0.03)).add(s);
+    _d.set(-s.x, 0, -s.z).normalize();
+    _S.look.copy(s).addScaledVector(_d, 1.2);
+
+    const away = _d.subVectors(p, s).normalize();
+    const side = _e.crossVectors(v.normal, away);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    side.normalize();
+    const alpha = 1.35 - 1.15 * v.night;
+    _P.focus.copy(p);
+    _P.pos.copy(away).multiplyScalar(Math.cos(alpha))
+      .addScaledVector(side, Math.sin(alpha))
+      .addScaledVector(v.normal, 0.12).normalize()
+      .multiplyScalar(PLANET_DIST * (1 - br * 0.02)).add(p);
+    _P.look.lerpVectors(p, s, 0.22 * (1 - THREE.MathUtils.smoothstep(alpha, 0.35, 0.9)));
+
+    _flight(_G, _S, v.approach, _A);
+    _flight(_A, _P, v.cross, _B);
+    _flight(_B, _G, v.back, _C);
+    pos.copy(_C.pos);
+    look.copy(_C.look);
+  }
+
   update(t, dt, bus) {
     this._dt = dt;
 
@@ -254,6 +324,8 @@ export class CameraRig {
           Math.cos(t * 0.052) * 6.0
         );
 
+    if (this.voyage && this.voyage.approach > 0) this._voyage(t, bus, pos, look);
+
     if (this.mode === "resuming") {
       this._blend = Math.min(1, this._blend + dt / RESUME_TIME);
       const k = this._blend * this._blend * (3 - 2 * this._blend);
@@ -279,3 +351,45 @@ export class CameraRig {
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+
+/* Dwell distances from the body being looked at. See Voyage.BODY for why the
+   bodies are the size they are. */
+const STAR_DIST = 7.8;
+const PLANET_DIST = 1.1;
+
+const pose = () => ({
+  pos: new THREE.Vector3(), look: new THREE.Vector3(), focus: new THREE.Vector3(),
+});
+const _G = pose(), _S = pose(), _P = pose(), _A = pose(), _B = pose(), _C = pose();
+const _d = new THREE.Vector3(), _e = new THREE.Vector3();
+const _da = new THREE.Vector3(), _db = new THREE.Vector3();
+
+/**
+ * Move between two poses, a powers-of-ten flight.
+ *
+ * Distance from the focus is interpolated in log space, so every halving
+ * takes the same time: the far end of a flight is long and the near end
+ * unhurried, the galaxy opening out rather than rushing by. The focus and the
+ * aim move in proportion to the distance CLOSED rather than to time — flying
+ * in, the camera turns toward where it is going almost at once, while the
+ * star is still a point; flying out, it keeps its eyes on the world until
+ * it is small, and only then lifts them to the galaxy. Direction around the
+ * focus is a normalised lerp: the poses never face each other, so it never
+ * passes through zero.
+ */
+function _flight(A, B, e, out) {
+  if (e <= 0) { out.pos.copy(A.pos); out.look.copy(A.look); out.focus.copy(A.focus); return; }
+  if (e >= 1) { out.pos.copy(B.pos); out.look.copy(B.look); out.focus.copy(B.focus); return; }
+  const dA = Math.max(1e-3, _da.subVectors(A.pos, A.focus).length());
+  const dB = Math.max(1e-3, _db.subVectors(B.pos, B.focus).length());
+  _da.divideScalar(dA);
+  _db.divideScalar(dB);
+  const d = Math.exp(Math.log(dA) + (Math.log(dB) - Math.log(dA)) * e);
+  const f = Math.abs(dA - dB) < 1e-3
+    ? e : THREE.MathUtils.clamp((dA - d) / (dA - dB), 0, 1);
+  out.focus.lerpVectors(A.focus, B.focus, f);
+  _da.lerp(_db, e);
+  if (_da.lengthSq() < 1e-8) _da.copy(_db);
+  out.pos.copy(out.focus).addScaledVector(_da.normalize(), d);
+  out.look.lerpVectors(A.look, B.look, f);
+}

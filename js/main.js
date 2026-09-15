@@ -65,7 +65,9 @@ const bus = new Bus();
 
    ?film=1&w=2560&h=1440&mins=30&mbps=40&p=1024
    &save=opfs  skip the save dialog; download the finished take instead
-   &grade=0    no film grade (see `grade` below); &floor=0.75 its exposure floor */
+   &grade=0    no film grade (see `grade` below); &floor=0.75 its exposure floor
+   &journey=0  no journey (see Voyage.js) — on by default, except in focus
+   &at=12      audition from minute 12; a take still starts from the top */
 const Q = new URLSearchParams(location.search);
 
 /* ---------------------------------------------------------------- listening
@@ -123,6 +125,11 @@ const film = Q.get("film") ? {
     dither: 1,
     minPx: 1.25,
   },
+  /* The journey: the film travels to a star and its world and back — see
+     Voyage.js. Off for focus films by default, where a flight across the
+     frame is exactly the drama a work film is built to avoid. */
+  journey: (Q.get("journey") ?? (_isFocus ? "0" : "1")) !== "0",
+  at: Math.max(0, +(Q.get("at") || 0)),
   // The mode list lives in the chrome, and film mode hides the chrome — so
   // without this a film could only ever be rendered in the default
   // temperament. A "sound bath" rendered in `meditate` is bells and no bowls.
@@ -570,7 +577,7 @@ if (organism) {
   if (film) {
     document.body.classList.add("is-film");
     if (film.mode) setMode(film.mode);
-    organism.depth.scriptTo(film.minutes * 60, film.session);
+    organism.depth.scriptTo(film.minutes * 60, film.session, film.at * 60);
 
     const hud = document.getElementById("film-hud");
     const fRec = document.getElementById("film-rec");
@@ -591,13 +598,16 @@ if (organism) {
     // State the take before it is taken. The temperament decides whether this
     // is a bath or something else entirely, and it is the one setting you
     // cannot see once the chrome is hidden.
-    fRead.textContent =
+    const voyage = organism.voyage;
+    const baseRead =
       `${organism.mode} · ${film.minutes}:00 · ${film.width}×${film.height}`
       + (film.session
           ? ` · ${film.session.work / 60}/${film.session.brk / 60} pomodoro`
           : " · continuous")
       + (film.visualPulse ? " · visual pulse ON" : "")
-      + (film.grade ? "" : " · grade OFF");
+      + (film.grade ? "" : " · grade OFF")
+      + (voyage ? ` · journey to ${voyage.name}` : "");
+    fRead.textContent = baseRead;
 
     const clock = (s) =>
       `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -807,7 +817,14 @@ if (organism) {
 
     setInterval(() => {
       const s = capture.stats();
-      if (!s) return;
+      // Between takes, say where in the story the audition is — the chapter
+      // is otherwise something you can only infer from the picture.
+      if (!s) {
+        if (voyage && fRead.textContent.startsWith(baseRead.slice(0, 12))) {
+          fRead.textContent = `${baseRead} · ${clock(organism.bus.filmT || 0)} ${voyage.chapter}`;
+        }
+        return;
+      }
       // End on the PLAYHEAD when there is a master, not on wall-clock: if the
       // renderer stutters the take runs long, and cutting it by the clock
       // would clip the last strike off the end of the film.
@@ -819,7 +836,8 @@ if (organism) {
       // whether the take is worth keeping before you have watched it back.
       fRead.textContent =
         `${clock(s.seconds)} / ${film.minutes}:00 · ${s.fps.toFixed(1)} fps · `
-        + `${s.gb.toFixed(2)} GB${s.saved ? "" : " · in memory"}${takeLabel}`;
+        + `${s.gb.toFixed(2)} GB${s.saved ? "" : " · in memory"}${takeLabel}`
+        + (voyage ? ` · ${voyage.chapter}` : "");
     }, 1000);
 
     // rAF halts in a hidden tab, which freezes breath and the pulse while the

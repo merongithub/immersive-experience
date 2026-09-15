@@ -65,6 +65,8 @@ const SIGNALS = [
   "arrival",     // transient, fires on return
   "pulse",       // 0..1 the isochronic entrainment pulse, ear and eye together
   "strike",      // raw weight of the event that just sounded, UNclamped
+  "filmT",       // seconds into the film, whichever clock is running it
+  "filmLen",     // the film's length in seconds; 0 when nothing is filmed
 
   /* --- a live instrument (LiveDriver) -----------------------------------
      What a mic'd handpan or bowl gives that the Engine never needed to:

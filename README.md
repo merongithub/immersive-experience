@@ -8,9 +8,13 @@ three.js from a CDN. Everything you see and hear is synthesised at runtime.
 ## Run
 
 ```bash
-python3 -m http.server 8137
+python3 tools/serve.py
 # open http://localhost:8137/
 ```
+
+`tools/serve.py` is `http.server` with caching off. The plain one lets Chrome
+keep serving recently edited modules from cache, and a page that loads one new
+module against one stale one sits on its boot screen with no error visible.
 
 Press **begin** (or spacebar). Headphones recommended, especially with voice on.
 
@@ -61,6 +65,8 @@ driver and not one line of the world changes.
 | Spiral roots | `js/world/Galaxy.js` |
 | GPGPU star field | `js/world/Tendrils.js` |
 | Camera drift | `js/world/CameraRig.js` |
+| A film's journey | `js/world/Voyage.js` |
+| The star and its world | `js/world/StarSystem.js` |
 | Bloom / grain / vignette / film grade | `js/world/Post.js` |
 | Blue-noise dither | `js/world/blueNoise.js` |
 | Session record | `js/session/Trace.js` |
@@ -236,6 +242,39 @@ Five things film mode changes, each because it would otherwise ruin a take:
     an encoder cannot predict, spent as bitrate and returned as mush. The
     dither is the same on every frame, in luma only, and sits on the pedestal
     so neither half of it is clipped.
+
+### The journey
+
+A film travels. One star, chosen by the seed and set inside the session's
+strongest nebula, is where it goes — "a star in the teal" — and the story is
+the depth curve's own shape told as a trip:
+
+| Chapter | Where (30-min film) | What happens |
+|---|---|---|
+| overture | 0:00 | The whole galaxy. From 3:00 one star starts answering the bowls — a glint on each strike — and that is the only foreshadowing. |
+| approach | 5:06 | A powers-of-ten flight to it: equal time for every halving of the distance, so the galaxy opens around you rather than rushing past. |
+| the star | 7:26 | Dwell. The star is light, not a ball — a brilliant point in a soft halo — and around it is the galaxy again, small: a disc of motes on the same palette, bone to ember to violet, the inner edge turning faster than the outer, seeded rings, and a clear lane where the world is sweeping its orbit. Strikes send a ring of light out through it. |
+| the world | 13:12 | Cross to the planet and arrive in its daylight — oceans, land, weather. Drift round through the terminator to the night side, the disc now edge-on as a band of light through the star; at the deepest point the star sits at the limb like a sunrise from orbit and the atmosphere burns as a crescent. Never a full eclipse. |
+| return | 21:00 | The long pull back — world, star, arm, disc — arriving as the depth curve surfaces. |
+| coda | 24:00 | The galaxy again, where it began. |
+
+Moves are clamped in absolute time, so a 3-minute test still flies for 20
+seconds rather than four. The music is not scheduled around any of it: the
+chapters follow the film clock and what happens inside them follows the Bus.
+The film clock is `Depth`'s script for a live take and the `FilmDriver`
+playhead for a rendered master, published on the Bus as `filmT`/`filmLen`, so
+both kinds of take travel identically.
+
+Inside the disc the rules change: star sprites cap at a few pixels so near
+stars read as points rather than a white wash, the nearest fade out, the near
+plane follows the camera in, and bloom steps back so the star's disc does not
+draw a square halo. The world is real geometry lit only by the star; the
+star and its disc are light, like everything else in the field. The whole
+system shrinks with distance, so from the galaxy view it is one point among
+points and the disc grows into the frame as you arrive.
+
+`&journey=0` turns it off; focus films default to off. `&at=12` auditions from
+minute 12 (a take still starts from the top), and the HUD names the chapter.
 
 Keep the tab visible. `requestAnimationFrame` halts in a hidden tab, which
 freezes breath and the pulse while the scheduler carries on playing bowls.

@@ -70,7 +70,11 @@ export class Post {
     this.renderPass.camera = camera;
   }
 
-  update(t, dt, bus, nova = null) {
+  /**
+   * @param {number} close  0..1 how far a journey has brought the camera in
+   *   among the bodies — see Organism._closeUp.
+   */
+  update(t, dt, bus, nova = null, close = 0) {
     this.fx.uniforms.uTime.value = t;
     this.fx.uniforms.uBreath.value = bus.breath;
     // Bloom swells with the body. Small range — past ~1.6 it stops reading as
@@ -114,6 +118,14 @@ export class Post {
          deep session, and if it did not overwhelm the frame it would not be
          worth having earned. The shell that follows is far gentler. */
       + (nova ? nova.flash * 0.9 + nova.amount * 0.22 : 0);
+
+    /* Close to a star, the bloom steps back. Its widest kernels are cut off
+       at one sigma, which on faint stars is invisible and on a lit disc a
+       sixth of the frame wide is a square halo with straight edges. The
+       corona carries the glow there instead. Radius first — it is the weight
+       on those widest kernels — then a little strength. */
+    this.bloom.radius = 0.85 - close * 0.6;
+    this.bloom.strength *= 1 - close * 0.7;
 
     this.fx.uniforms.uVignette.value = 1.15 + bus.depth * 0.55;
   }
