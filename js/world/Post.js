@@ -1,5 +1,6 @@
 /**
- * Post — HDR composite: bloom, then grain/aberration/vignette, then output.
+ * Post — HDR composite: bloom, then grain/aberration/vignette, then output,
+ * then — on a film — the grade.
  *
  * The whole look depends on this. Every material in ANIMA writes values well
  * above 1.0 into a half-float target; bloom is what turns those into light.
@@ -13,10 +14,15 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { PostFXShader } from "./shaders.js";
+import { PostFXShader, FilmGradeShader } from "./shaders.js";
+import { blueNoiseTexture } from "./blueNoise.js";
 
 export class Post {
-  constructor(renderer, scene, camera) {
+  /**
+   * @param {object=} opts.grade  a film's grade — {lift, dither} in 8-bit
+   *   steps of the encoded output. Absent live.
+   */
+  constructor(renderer, scene, camera, { grade = null } = {}) {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
@@ -44,6 +50,19 @@ export class Post {
     this.composer.addPass(this.fx);
 
     this.composer.addPass(new OutputPass());
+
+    /* A film's grade goes after the output transform, so its dither lands on
+       the values that are about to be quantised — see FilmGradeShader. The
+       animated grain goes to zero: this does its anti-banding job, and does
+       it without handing the encoder a new field of noise every frame. */
+    if (grade) {
+      this.fx.uniforms.uGrain.value = 0;
+      this.grade = new ShaderPass(FilmGradeShader);
+      this.grade.uniforms.uNoise.value = blueNoiseTexture();
+      this.grade.uniforms.uLift.value = grade.lift / 255;
+      this.grade.uniforms.uDither.value = grade.dither / 255;
+      this.composer.addPass(this.grade);
+    }
   }
 
   setCamera(camera) {
@@ -51,7 +70,11 @@ export class Post {
     this.renderPass.camera = camera;
   }
 
-  update(t, dt, bus) {
+  /**
+   * @param {number} close  0..1 how far a journey has brought the camera in
+   *   among the bodies — see Organism._closeUp.
+   */
+  update(t, dt, bus, nova = null, close = 0) {
     this.fx.uniforms.uTime.value = t;
     this.fx.uniforms.uBreath.value = bus.breath;
     // Bloom swells with the body. Small range — past ~1.6 it stops reading as
@@ -77,7 +100,32 @@ export class Post {
          band where photosensitive-epilepsy risk is highest, which is a
          different calculation for a video playing to strangers than for a piece
          on your own monitor. The AUDIO pulse is untouched. */
-      + bus.pulse * this.pulseAmount * (0.035 + bus.depth * 0.070);
+      + bus.pulse * this.pulseAmount * (0.035 + bus.depth * 0.070)
+
+      /* Your voice lifts the light.
+         Until now the only thing your voice reached was a force in the star
+         sim — it could move the field but never brighten it, so singing
+         stirred the galaxy without lighting it. This is the cheapest line in
+         the project and close to the most felt: hum, and the whole image
+         glows. The attack term puts the flare on the front of the phrase
+         rather than in the middle of it, which is where a voice actually has
+         its transient. */
+      + bus.voice * 0.34
+      + bus.voiceAttack * 0.16
+
+      /* A detonation blows the bloom open. This is the one moment the piece
+         is allowed to be loud in the eye — it happens perhaps twice in a long
+         deep session, and if it did not overwhelm the frame it would not be
+         worth having earned. The shell that follows is far gentler. */
+      + (nova ? nova.flash * 0.9 + nova.amount * 0.22 : 0);
+
+    /* Close to a star, the bloom steps back. Its widest kernels are cut off
+       at one sigma, which on faint stars is invisible and on a lit disc a
+       sixth of the frame wide is a square halo with straight edges. The
+       corona carries the glow there instead. Radius first — it is the weight
+       on those widest kernels — then a little strength. */
+    this.bloom.radius = 0.85 - close * 0.6;
+    this.bloom.strength *= 1 - close * 0.7;
 
     this.fx.uniforms.uVignette.value = 1.15 + bus.depth * 0.55;
   }
@@ -89,5 +137,8 @@ export class Post {
     this.bloom.setSize(w, h);
   }
 
-  dispose() { this.composer.dispose?.(); }
+  dispose() {
+    this.grade?.uniforms.uNoise.value.dispose();
+    this.composer.dispose?.();
+  }
 }

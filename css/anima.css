@@ -188,6 +188,20 @@ body.is-descending #stillness-hint { opacity: 0; }
 
 @media (max-width: 767px) { #stillness-hint { display: none; } }
 
+/* The ear's one line: what it is listening to and what it just heard. Under
+   the stillness hint, and unlike the hint it stays — this is a test rig. */
+#listen {
+  position: absolute;
+  top: calc(var(--line) * 4.8);
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 200;
+  letter-spacing: 0.08ch;
+  white-space: nowrap;
+  user-select: none;
+}
+#listen.hover { cursor: pointer; }
+
 /* Voice. Sits above the mode list, in the same type as everything else. */
 #voice-panel {
   position: absolute;
@@ -284,7 +298,25 @@ body.is-descending #stillness-hint { opacity: 0; }
    same frame the file is getting, and so a screen recorder can be pointed at
    this too. */
 
-body.is-film #chrome { display: none; }
+/* Film mode strips the chrome — except the voice panel.
+   Hiding the whole container was right when a film was something you only ever
+   sat in front of and watched, and wrong the moment you want your own voice in
+   the take: the mic toggle and the guidance controls live in there, so there
+   was no way to switch them on without leaving film mode entirely.
+
+   Showing them costs the take nothing. captureStream() reads the canvas alone,
+   so nothing in the DOM has ever been in the recording — which is the same
+   reason the Readout had to be drawn INTO the canvas to appear at all. The
+   panel is on screen for the operator and absent from the file.
+
+   Hidden per-child rather than on #chrome itself, because #chrome is the
+   pointer-events container: display:none on the parent would take the panel
+   with it however the child is styled. */
+body.is-film #chrome > *:not(#voice-panel) { display: none; }
+
+/* And it must not fade to 9% while you are trying to hit record. */
+body.is-film #voice-panel { opacity: 1; }
+body.is-film #chrome { opacity: 1; }
 
 #film-hud {
   position: fixed;

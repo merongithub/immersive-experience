@@ -19,9 +19,13 @@
  *
  *   STREAMED TO DISK  an hour at 40 Mbps is about 18 GB, which is not going to
  *                  sit in a Blob. Chunks are written to a file handle as they
- *                  arrive. Where the File System Access API is unavailable, it
- *                  falls back to memory and a download — fine for a few minutes,
- *                  not for a full bath.
+ *                  arrive. The handle comes from a save dialog when there is
+ *                  somebody there to answer it; otherwise from the origin's
+ *                  private file system, which needs neither a dialog nor a
+ *                  gesture, and the finished file is handed to the browser's
+ *                  downloader at the end. That second path is what lets a
+ *                  twenty-minute take run unattended. Memory and a download is
+ *                  the last resort — fine for a few minutes, not for a bath.
  *
  * Note the HTML chrome is NOT in the recording. captureStream reads the canvas
  * only, so the readouts and mode list never appear. Hiding them is for the
@@ -42,10 +46,14 @@ export class Capture {
    * @param {{tap: function}} opts.source  whatever is making sound — an Engine
    *   or a FilmDriver. Both expose tap(), so recording does not care which.
    */
-  constructor({ canvas, source, bitrate = 40e6, fps = 60 }) {
+  constructor({ canvas, source, bitrate = 40e6, fps = 60, picker = true }) {
     this.canvas = canvas;
     this.source = source;
     this.bitrate = bitrate;
+    /* false skips the save dialog and goes straight to private storage — for
+       a take started by a script, or one nobody wants to babysit. */
+    this.picker = picker;
+    this._opfs = null;    // { root, name } while writing to private storage
 
     /* Frames are requested once per composite, and rAF runs at the DISPLAY's
        refresh rate — which on a 120 Hz panel means a 120 fps variable-rate
@@ -124,21 +132,44 @@ export class Capture {
   }
 
   async _openFile(name, mime) {
-    if (!window.showSaveFilePicker) return null;
     const ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
-    try {
-      const handle = await showSaveFilePicker({
-        suggestedName: `${name}.${ext}`,
-        types: [{
-          description: "Video",
-          accept: { [mime.split(";")[0]]: [`.${ext}`] },
-        }],
-      });
-      return await handle.createWritable();
-    } catch {
-      // Declined, or the API is behind a flag. Memory is the honest fallback.
-      return null;
+    this._opfs = null;
+
+    if (this.picker && window.showSaveFilePicker) {
+      try {
+        const handle = await showSaveFilePicker({
+          suggestedName: `${name}.${ext}`,
+          types: [{
+            description: "Video",
+            accept: { [mime.split(";")[0]]: [`.${ext}`] },
+          }],
+        });
+        return await handle.createWritable();
+      } catch {
+        // Declined. Fall through to private storage rather than to memory.
+      }
     }
+
+    /* The origin's private file system. No dialog and no gesture, and it is
+       real disk, so a multi-gigabyte take streams to it as happily as to a
+       chosen file. It is not user-visible, which is why stop() downloads the
+       result — and why the previous take is cleared here first: the quota is
+       shared with everything else the site stores. */
+    if (navigator.storage?.getDirectory) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        for await (const key of root.keys()) {
+          try { await root.removeEntry(key); } catch { /* in use elsewhere */ }
+        }
+        const fileName = `${name}.${ext}`;
+        const fh = await root.getFileHandle(fileName, { create: true });
+        this._opfs = { root, name: fileName, handle: fh };
+        return await fh.createWritable();
+      } catch (err) {
+        console.warn("[ANIMA] private storage unavailable, recording to memory", err);
+      }
+    }
+    return null;
   }
 
   /** Called by Organism once per composite. */
@@ -178,6 +209,21 @@ export class Capture {
     if (this.writer) {
       await this.writer.close();
       this.writer = null;
+      if (this._opfs) {
+        // Nobody can see private storage; hand the finished file to the
+        // browser's downloader. The Blob is file-backed, so this is a copy
+        // to the downloads folder, not a load into memory.
+        const file = await this._opfs.handle.getFile();
+        const url = URL.createObjectURL(file);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = this._opfs.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        out.saved = false;
+        out.name = this._opfs.name;
+        return out;
+      }
       out.saved = true;
       return out;
     }

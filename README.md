@@ -8,9 +8,13 @@ three.js from a CDN. Everything you see and hear is synthesised at runtime.
 ## Run
 
 ```bash
-python3 -m http.server 8137
+python3 tools/serve.py
 # open http://localhost:8137/
 ```
+
+`tools/serve.py` is `http.server` with caching off. The plain one lets Chrome
+keep serving recently edited modules from cache, and a page that loads one new
+module against one stale one sits on its boot screen with no error visible.
 
 Press **begin** (or spacebar). Headphones recommended, especially with voice on.
 
@@ -61,7 +65,10 @@ driver and not one line of the world changes.
 | Spiral roots | `js/world/Galaxy.js` |
 | GPGPU star field | `js/world/Tendrils.js` |
 | Camera drift | `js/world/CameraRig.js` |
-| Bloom / grain / vignette | `js/world/Post.js` |
+| A film's journey | `js/world/Voyage.js` |
+| The star and its world | `js/world/StarSystem.js` |
+| Bloom / grain / vignette / film grade | `js/world/Post.js` |
+| Blue-noise dither | `js/world/blueNoise.js` |
 | Session record | `js/session/Trace.js` |
 | Keepsake | `js/session/Sigil.js` |
 
@@ -137,6 +144,50 @@ reached. Exportable as PNG, or as a ~320-character permalink.
 - `session` — open the sigil
 - `?p=512` — override the particle tier
 
+## Listening
+
+`?source=` hands the Bus to a `LiveDriver`: the field is driven by what the
+microphone **hears** rather than by the Engine's score. This is the ear for
+creative-space, proven on the galaxy first.
+
+```
+?source=mic                      the room — a handpan, a bowl, a voice
+?source=mic&accompany=1          the Engine plays under you; its own sound is
+                                 subtracted from what the mic hears and its
+                                 scheduled strikes are masked
+?source=file&url=take.wav        a recording, fetched — or drop one on the page
+?source=engine                   the built-in instrument, through the analysis
+                                 instead of the score
+&sens=0.6                        onset sensitivity, 0..1
+```
+
+What a live instrument gives that the Engine never needed to: `strike` and
+`onset` from **spectral flux** (a level follower misses a second hit inside the
+ring of the first; the spectrum does not), `noteClass` from what *changed* in
+the **chroma** at the strike (so a D over three ringing bowls still reads as a
+D), `chroma` and `hue` for colour, and — when the playing is rhythmic —
+`anticipation` from **inter-onset prediction**, which is the only route back to
+the pre-echo a file can never supply. Free-time bowl playing gets none, by
+design.
+
+Onsets are scored per bin as the *squared* rise above an adaptive knee, and
+only within 45 dB of the loudest thing heard recently — so a soft bowl is heard
+over a noise bed while a room's hiss is not an event however sharply it
+arrives. Strikes that arrive densely weigh less each, so a groove reads as
+rhythm rather than lightning. `?source=engine` will hear the Engine's own
+granular layer as a stream of small strikes; it is one, and there is nothing to
+subtract it against there. That mode is a plumbing check, not a benchmark.
+
+Pitch classes come from interpolated spectral peaks rather than bins: at 2048
+points a bin is 23 Hz wide and a semitone at D4 is 17, so a raw bin names the
+handpan's D a semitone wrong, reliably.
+
+| Piece | File |
+|---|---|
+| Source (mic / file / engine tap) | `js/listen/Source.js` |
+| Onset · chroma · note · tempo | `js/listen/Analysis.js` |
+| Publishing onto the Bus | `js/listen/LiveDriver.js` |
+
 ## Filming
 
 `?film=1` turns the piece into something being recorded rather than sat in.
@@ -153,9 +204,11 @@ Video comes off the canvas and audio off the Engine's compressor, into one
 `MediaRecorder`. Both from the same clock, so there is nothing to re-sync over
 an hour. Chunks stream to a file handle as they arrive rather than piling up in
 memory. The chrome is not in the recording — `captureStream` reads the canvas
-alone.
+alone. `&save=opfs` skips the save dialog: the take streams to the origin's
+private storage and is downloaded when it ends, so a long take can be started
+by a script and left alone.
 
-Three things film mode changes, each because it would otherwise ruin a take:
+Five things film mode changes, each because it would otherwise ruin a take:
 
 - **The adaptive downscaler is locked.** It drops render scale under 42fps and
   only recovers above 57, so a capture run ratchets it down and never recovers.
@@ -163,6 +216,65 @@ Three things film mode changes, each because it would otherwise ruin a take:
   the opening, descending across the body, surfacing again before the end. The
   live rule would reach full depth at five and a half minutes and sit there.
 - **Resolution is set outright**, rather than capped at window × 1.5.
+- **The camera is the film camera.** The live drift's whole trip is the
+  descent into the plane — the band-of-light view — and on the first film it
+  spent the take within ~10° of it, the disc a stretched streak, the spiral
+  almost never on screen. The film drift holds elevation between 25° and 65°
+  above the plane (±10° on a cycle slower than most takes), orbits below the
+  speed the eye catches, and every few hundred seconds pushes slowly in to
+  dwell on the nucleus before drifting back out — over the disc, never into
+  it. `&cam=drift` opts a take back into the live camera.
+- **The picture is graded for an encoder and a phone.** `&grade=0` turns it
+  off for an A/B.
+  - *Exposure floor.* Depth dims live exposure to 0.45, near-black on a phone
+    in daylight. A film's descent is rescaled to land on `&floor=` (0.75)
+    rather than clamped there, so the dimming keeps its shape.
+  - *Star sprites in 1080-line pixels.* Live, a star is sized in device
+    pixels, so a 4K frame drew the same pixel-sized stars as a 1080 one and a
+    player's downscale left each a quarter as bright. Measured, an ungraded
+    4K frame averaged to 1080 carries a fifth of the light of a 1080 take; a
+    graded one is within 4%. The faintest sprites also get a floor of 1.25
+    reference pixels (2.5 at 4K), with their brightness scaled down to match,
+    so the same light is spread wide enough to survive the downscale.
+  - *Blacks two 8-bit steps off zero, and a static blue-noise dither* of one
+    step after the tone curve, in place of the animated grain. On black the
+    grain spread values over 0–25, in colour, different every frame — noise
+    an encoder cannot predict, spent as bitrate and returned as mush. The
+    dither is the same on every frame, in luma only, and sits on the pedestal
+    so neither half of it is clipped.
+
+### The journey
+
+A film travels. One star, chosen by the seed and set inside the session's
+strongest nebula, is where it goes — "a star in the teal" — and the story is
+the depth curve's own shape told as a trip:
+
+| Chapter | Where (30-min film) | What happens |
+|---|---|---|
+| overture | 0:00 | The whole galaxy. From 3:00 one star starts answering the bowls — a glint on each strike — and that is the only foreshadowing. |
+| approach | 5:06 | A powers-of-ten flight to it: equal time for every halving of the distance, so the galaxy opens around you rather than rushing past. |
+| the star | 7:26 | Dwell. The star is light, not a ball — a brilliant point in a soft halo — and around it is the galaxy again, small: a disc of motes on the same palette, bone to ember to violet, the inner edge turning faster than the outer, seeded rings, and a clear lane where the world is sweeping its orbit. Strikes send a ring of light out through it. |
+| the world | 13:12 | Cross to the planet and arrive in its daylight — oceans, land, weather. Drift round through the terminator to the night side, the disc now edge-on as a band of light through the star; at the deepest point the star sits at the limb like a sunrise from orbit and the atmosphere burns as a crescent. Never a full eclipse. |
+| return | 21:00 | The long pull back — world, star, arm, disc — arriving as the depth curve surfaces. |
+| coda | 24:00 | The galaxy again, where it began. |
+
+Moves are clamped in absolute time, so a 3-minute test still flies for 20
+seconds rather than four. The music is not scheduled around any of it: the
+chapters follow the film clock and what happens inside them follows the Bus.
+The film clock is `Depth`'s script for a live take and the `FilmDriver`
+playhead for a rendered master, published on the Bus as `filmT`/`filmLen`, so
+both kinds of take travel identically.
+
+Inside the disc the rules change: star sprites cap at a few pixels so near
+stars read as points rather than a white wash, the nearest fade out, the near
+plane follows the camera in, and bloom steps back so the star's disc does not
+draw a square halo. The world is real geometry lit only by the star; the
+star and its disc are light, like everything else in the field. The whole
+system shrinks with distance, so from the galaxy view it is one point among
+points and the disc grows into the frame as you arrive.
+
+`&journey=0` turns it off; focus films default to off. `&at=12` auditions from
+minute 12 (a take still starts from the top), and the HUD names the chapter.
 
 Keep the tab visible. `requestAnimationFrame` halts in a hidden tab, which
 freezes breath and the pulse while the scheduler carries on playing bowls.

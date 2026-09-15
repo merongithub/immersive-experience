@@ -25,6 +25,27 @@
    anticipation                       an event is COMING — only a generative
                                       source can supply this; an mp3 cannot
    presenceAmt                        how much of YOU is in the field (M3)
+   strike                             what just sounded, at its true weight.
+                                      `onset` saturates at 1, so by the time it
+                                      reaches the world a gong and a bowl are
+                                      the same event — which is fine for a
+                                      bloom and useless for anything that must
+                                      happen only on the largest strike there
+                                      is. Published by both real drivers, so a
+                                      film keeps whatever it triggers.
+
+   voicePitch                         WHERE you are singing, not just how loud.
+                                      Loudness alone can only ever push; pitch
+                                      is what lets your voice choose a colour.
+   voiceAttack                        the moment a phrase STARTS, which a level
+                                      follower cannot give you — it is already
+                                      smoothed by the time it has risen.
+   voiceBreath                        your own breathing, as a measured envelope
+                                      rather than a reconstructed phase. Paired
+                                      with voiceBreathAmt because a breath rate
+                                      takes three cycles to establish and
+                                      publishing a guess before then would have
+                                      the field follow noise.
 */
 
 const SIGNALS = [
@@ -33,12 +54,30 @@ const SIGNALS = [
   "tempo", "phase", "anticipation", "presenceAmt",
   "voice",       // your loudness, 0..1
   "voiced",      // how tonal it is — humming vs breathing
+  "voicePitch",  // 0..1 where in your range you are, log-scaled over ~3 octaves
+  "voiceAttack", // transient, fires when a phrase begins
+  "voiceBreath", // 0..1 YOUR breathing, measured rather than modelled
+  "voiceBreathAmt", // 0..1 how far the estimate can be trusted
   "depth",       // 0..1 how far into the session stillness has taken you
   "stillness",   // 0..1 how still you are right now
   "dwell",       // minutes held at full depth
   "away",        // 0..1 you are not looking at this
   "arrival",     // transient, fires on return
   "pulse",       // 0..1 the isochronic entrainment pulse, ear and eye together
+  "strike",      // raw weight of the event that just sounded, UNclamped
+  "filmT",       // seconds into the film, whichever clock is running it
+  "filmLen",     // the film's length in seconds; 0 when nothing is filmed
+
+  /* --- a live instrument (LiveDriver) -----------------------------------
+     What a mic'd handpan or bowl gives that the Engine never needed to:
+     the Engine knows what it played; these are what we could HEAR. */
+  "hue",         // 0..1 where on the pitch-class circle the sound sits (C = 0)
+  "note",        // transient, fires when a NEW pitch class is struck
+  "noteClass",   // 0..11 which one — valid only while `note` is fresh; -1 = none
+  "tonal",       // 0..1 how peaked the chroma is: a note vs a wash vs noise
+  "tempoConf",   // 0..1 how sure the ear is about the pulse it is predicting
+  "beating",     // 0..1 the slow amplitude wobble of a singing bowl
+  "flow",        // 0..1 continuity of playing — creative-space's depth
 ];
 
 /**
@@ -124,6 +163,11 @@ export const MODES = {
 export class Bus {
   constructor() {
     for (const k of SIGNALS) this[k] = 0;
+    this.noteClass = -1;
+    /* Per pitch class, 0..1. The one non-scalar on the Bus: a chord is twelve
+       numbers and collapsing it to one would throw away exactly the information
+       that lets a struck D and a struck A be different colours. */
+    this.chroma = new Float32Array(12);
     this.warmth = 0.4;
     this.breath = 0;
     this.time = 0;

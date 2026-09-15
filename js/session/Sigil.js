@@ -171,6 +171,16 @@ export class Sigil {
     ctx.fillText(`${modes}${sum.voiced ? "  ·  with voice" : ""}  ·  ${date}`,
       cx, y0 + size * 0.030);
 
+    /* The seed. Faint, and last, because it is the one line here that is not
+       about the sitting — but it is the line that lets somebody go back to a
+       galaxy they liked, or hand it to someone else. A keepsake of a field
+       that can never be seen again is a smaller thing than one that can. */
+    if (trace.seed) {
+      ctx.fillStyle = "rgba(239,230,220,0.20)";
+      ctx.font = mono.replace("{S}", Math.round(size * 0.0135));
+      ctx.fillText(`seed ${trace.seed}`, cx, y0 + size * 0.058);
+    }
+
     return cv;
   }
 

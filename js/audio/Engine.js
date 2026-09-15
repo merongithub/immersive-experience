@@ -850,7 +850,10 @@ export class Engine {
     this.cfg = VOICING[name];
     this.targetPeriod = PERIOD[name] ?? 11.0;
 
-    if (!this.ctx) return;
+    // A context is not a graph. Listening mode hands the Engine a context at
+    // boot so the mic can share it, and the graph is only built on start() —
+    // so until then there is nothing here to re-voice.
+    if (!this.ctx || !this.master) return;
     const t = this.ctx.currentTime;
     this.droneBus.gain.setTargetAtTime(this.cfg.droneGain, t, 2.0);
     this.grainBus.gain.setTargetAtTime(this.cfg.grainGain, t, 2.0);
@@ -1015,6 +1018,9 @@ export class EngineDriver {
     this._lastFired = now;
     if (strike > 0) bus.onset = Math.min(1, bus.onset + 0.5 + 0.5 * strike);
     bus.onset = follow(bus.onset, 0, 0.02, 0.34, dt);
+    // The unclamped weight, held for one frame only. Anything reading this is
+    // looking for a specific KIND of event, not for a level.
+    bus.strike = strike;
 
     // Rises over the second before an event lands, then releases with it.
     bus.anticipation = follow(

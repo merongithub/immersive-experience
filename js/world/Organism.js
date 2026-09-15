@@ -16,6 +16,10 @@ import { CameraRig } from "./CameraRig.js";
 import { Presence } from "../presence/Presence.js";
 import { Depth } from "../presence/Depth.js";
 import { Readout } from "./Readout.js";
+import { Nova } from "./Nova.js";
+import { SESSION } from "./Seed.js";
+import { Voyage, BODY } from "./Voyage.js";
+import { StarSystem } from "./StarSystem.js";
 
 /* Per-temperament physics. Mode never changes what is on screen — only how
    eagerly it moves and how tightly it holds together. */
@@ -108,14 +112,37 @@ export class Organism {
     });
     this.dust = new Dust(this.scene);
 
+    /* Seeded from the session, so a given galaxy detonates in the same places
+       — which is what makes a shared seed a shared experience rather than the
+       same arms with different luck. */
+    this.nova = new Nova();
+    this.nova.useRng(SESSION.rng);
+
     this.tendrils.setPixelRatio(this._basePR);
     this.dust.setPixelRatio(this._basePR);
+    const grade = this.film?.grade;
+    if (grade) {
+      // Sprites in pixels of a 1080-line frame, so a 4K take holds the same
+      // stars a 1080 one does. Frame height, not width: the framing is set by
+      // the vertical field of view.
+      const scale = (this.film.height * (this.film.pixelRatio || 1)) / 1080;
+      this.tendrils.setFilmScale(scale, grade.minPx);
+      this.dust.setFilmScale(scale, grade.minPx);
+    }
 
     this.rig = new CameraRig({
       camera: this.camera,
       domElement: this.view,
       onMode: (m) => this.onCameraMode?.(m),
     });
+
+    /* A film with somewhere to go — see Voyage. The camera flies it; the
+       place itself is drawn by StarSystem. */
+    this.voyage = this.film?.journey ? new Voyage() : null;
+    if (this.voyage) {
+      this.system = new StarSystem(this.scene, this.voyage);
+      this.rig.voyage = this.voyage;
+    }
 
     this.depth = new Depth();
     this.presence = new Presence({
@@ -131,7 +158,8 @@ export class Organism {
   }
 
   _initPost() {
-    this.post = new Post(this.renderer, this.scene, this.camera);
+    this.post = new Post(this.renderer, this.scene, this.camera,
+                         { grade: this.film?.grade });
 
     /* A focus film turns the picture down in two specific ways, both because
        motion and flicker in peripheral vision are what pull eyes off work. The
@@ -140,6 +168,10 @@ export class Organism {
     if (this.film) {
       this.post.pulseAmount = this.film.visualPulse ?? 1;
       this.rig.swing = this.film.swing ?? 1;
+      // Film gets the film camera unless the take explicitly asks for the
+      // live drift (&cam=drift) — the descent into the plane that drift is
+      // built around is exactly what ruined the first film's framing.
+      this.rig.cinema = this.film.cam !== "drift";
       if (this.film.readout) {
         this.readout = new Readout();
         this.readout.setSize(this._w(), this._h());
@@ -180,7 +212,16 @@ export class Organism {
     // Arrival briefly lifts everything back up, so returning is a greeting
     // rather than a jump-cut into whatever state you left.
     const lift = bus.arrival * 0.5;
-    this.renderer.toneMappingExposure = (1.0 - d * 0.55) * (1 + lift) * (1 - bus.away * 0.7);
+
+    /* A film has a floor. Live, full depth dims to 0.45, which is right in a
+       dark room with your eyes closed and near-black on a phone in daylight —
+       where most of a film's audience is. The descent is rescaled to land on
+       the floor rather than clamped at it: a clamp would reach it a third of
+       the way down and sit there, and the dimming is the shape of the piece. */
+    const floor = this.film?.grade?.floor ?? 0;
+    const dim = Math.min(0.55, 1 - floor);
+    this.renderer.toneMappingExposure = Math.max(floor,
+      (1.0 - d * dim) * (1 + lift) * (1 - bus.away * 0.7));
 
     return this._deep;
   }
@@ -210,6 +251,40 @@ export class Organism {
     loop();
   }
 
+  /**
+   * Keep a take alive while the tab is hidden.
+   *
+   * requestAnimationFrame halts the moment a tab is covered — and on a Mac a
+   * window behind the terminal counts as covered — while the master plays on.
+   * The first twenty-minute take lost two minutes of picture to exactly that,
+   * with nothing on screen to say so. Audio does not stop in a hidden tab, so
+   * a processing node on the playback context is a clock that keeps ticking,
+   * and while rAF is asleep it drives the frame instead. Frames are paced to
+   * the film rate; when the tab is visible it does nothing at all.
+   *
+   * ScriptProcessorNode is deprecated and it is the right tool here: an
+   * AudioWorklet would need a second file fetched at runtime for a callback
+   * that only ever forwards a tick. 256 frames is ~5 ms at 48 kHz: frames can
+   * only land on callback boundaries, and at 512 the nearest boundary past a
+   * 60 fps period was 21 ms — a take paced at 47 fps, measured.
+   *
+   * @param {BaseAudioContext} ctx  the context the film's audio plays on
+   */
+  attachPacer(ctx) {
+    if (!this.film || !ctx || this._pacer) return;
+    const sp = ctx.createScriptProcessor(256, 1, 1);
+    const period = 1000 / this.film.fps;
+    let last = performance.now();
+    sp.onaudioprocess = () => {
+      if (this._disposed) return;
+      if (!document.hidden) { last = performance.now(); return; }
+      const now = performance.now();
+      if (now - last >= period - 1) { last = now; this._tick(); }
+    };
+    sp.connect(ctx.destination);   // silent; a node must be connected to run
+    this._pacer = sp;
+  }
+
   _tick() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
@@ -221,18 +296,28 @@ export class Organism {
     // responding to where you were one frame ago on top of its own hesitation.
     // Depth runs last of the three: it consumes the pokes the other two filed.
     this.presence.update(dt, bus);
-    this.mic?.update(dt, bus);
+    if (this.mic) this.mic.update(dt, bus);
+    else this._releaseVoice(dt, bus);
     this.guide?.update(dt, bus, this.mode);
     this.depth.update(dt, bus);
     this.trace?.update(dt, bus, this.mode);
 
     const tuning = this._descend(bus);
 
+    // After Depth and the driver, which between them publish the film clock.
+    this.voyage?.update(t, dt, bus);
+
+    // Before the world reads it, so the frame a nova fires on is the frame it
+    // is visible on. Reading the Bus only, which is why a film detonates in
+    // the same places the live piece does.
+    this.nova.update(dt, bus);
+
     this.galaxy.update(t, dt, bus);
-    this.tendrils.update(t, dt, bus, tuning, this.presence);
+    this.tendrils.update(t, dt, bus, tuning, this.presence, this.nova);
     this.dust.update(t, dt, bus);
     this.rig.update(t, dt, bus);
-    this.post.update(t, dt, bus);
+    if (this.voyage) this._closeUp(t, dt, bus);
+    this.post.update(t, dt, bus, this.nova, this._close || 0);
 
     this.post.render(dt);
 
@@ -253,6 +338,65 @@ export class Organism {
       this._resolveReady = null;
       requestAnimationFrame(() => done());
     }
+  }
+
+  /**
+   * What changes when the camera is among the stars rather than above them.
+   *
+   * Star sprites resolve into points and the nearest clear away (see
+   * Tendrils.setCloseUp); the near plane comes in with the camera, from the
+   * half unit that is plenty for a galaxy to the few hundredths a world
+   * three tenths of a unit wide needs. And the bodies are told how big a
+   * pixel is, so the star knows whether it is a disc yet or still a glint.
+   */
+  _closeUp(t, dt, bus) {
+    const v = this.voyage, cam = this.camera;
+    const dStar = cam.position.distanceTo(v.star);
+    const dWorld = cam.position.distanceTo(v.planet);
+
+    const k = Math.min(1, Math.max(0, (22 - dStar) / (22 - 8)));
+    const closeness = k * k * (3 - 2 * k);
+    this.tendrils.setCloseUp(closeness, closeness * 2.8);
+    this._close = closeness;
+
+    const nearest = Math.min(dStar - BODY.starRadius,
+                             dWorld - BODY.planetRadius * 2.6);   // ring's edge
+    const near = Math.min(0.5, Math.max(0.02, nearest * 0.3));
+    if (Math.abs(cam.near - near) > near * 0.01) {
+      cam.near = near;
+      cam.updateProjectionMatrix();
+    }
+
+    const H = this.renderer.getDrawingBufferSize(_size).y;
+    const pxPerUnit = (H / 2) / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+    this.system.update(t, dt, bus, cam, pxPerUnit, H / 1080);
+  }
+
+  /**
+   * Ease the voice signals to rest when there is nobody on the mic.
+   *
+   * Mic is the only publisher of these, and it stops being ticked the moment
+   * the listener turns their voice off — which left every one of them frozen
+   * at whatever it held on the last frame, for the rest of the session. Turn
+   * the mic off mid-note and the field kept a permanent outward push, the
+   * readout sat at a level nobody was producing, and the camera went on
+   * breathing someone else's rhythm at full confidence.
+   *
+   * Faded rather than zeroed. A hard cut would snap the arms back the instant
+   * the button was pressed, and letting go of a note should look like letting
+   * go of it.
+   */
+  _releaseVoice(dt, bus) {
+    if (!bus.voice && !bus.voiceBreathAmt) return;   // already at rest
+    const k = 1 - Math.exp(-dt / 0.6);
+    bus.voice -= bus.voice * k;
+    bus.voiced -= bus.voiced * k;
+    bus.voiceAttack -= bus.voiceAttack * k;
+    // Trust decays first, so the breath curve is ignored before it is unwound
+    // — the reverse order would hand the camera a collapsing breath to follow.
+    bus.voiceBreathAmt -= bus.voiceBreathAmt * (1 - Math.exp(-dt / 0.35));
+    bus.voiceBreath -= (bus.voiceBreath - 0.5) * k;
+    bus.voicePitch -= (bus.voicePitch - 0.5) * k;   // back to the neutral hue
   }
 
   /* Drop render scale before dropping particle count: the field's silhouette is
@@ -301,6 +445,7 @@ export class Organism {
   destroy() {
     this._disposed = true;
     cancelAnimationFrame(this.raf);
+    try { this._pacer?.disconnect(); } catch { /* already gone */ }
     removeEventListener("resize", this._onResize);
     this.rig?.dispose();
     this.presence?.dispose();
@@ -309,7 +454,10 @@ export class Organism {
     this.galaxy?.dispose();
     this.tendrils?.dispose();
     this.dust?.dispose();
+    this.system?.dispose();
     this.post?.dispose();
     this.renderer.dispose();
   }
 }
+
+const _size = new THREE.Vector2();

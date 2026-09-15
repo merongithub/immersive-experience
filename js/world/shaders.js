@@ -71,6 +71,31 @@ export const PALETTE_GLSL = /* glsl */ `
   }
 `;
 
+/** A point sprite's size, clamped — and the brightness that keeps its light.
+    Vertex shaders only; the fragment side declares `varying float vPtGain` and
+    multiplies it in.
+
+    A sprite's total light goes as the square of its size, so every clamp is
+    also a change of brightness. Live, uPtRef sits on uPtMin and the gain is
+    exactly 1: the piece looks as it always has. A film raises the floor so
+    the faintest stars cover enough pixels to survive a 4K→1080 downscale, and
+    the gain gives back what the floor would otherwise add — the same light,
+    spread wider. uPtRef is the size a star below the floor was really drawn
+    at: one hardware pixel, in the film's reference pixels.
+
+    Clamping at the ceiling is left alone, as it always was. A nova-lit star
+    pinned at the maximum gets dimmer, not brighter. */
+export const POINT_GLSL = /* glsl */ `
+  uniform float uPtMin, uPtMax, uPtRef;
+  varying float vPtGain;
+  float pointSize(float s){
+    float S = clamp(s, uPtMin, uPtMax);
+    float k = max(min(s, uPtMax), uPtRef) / S;
+    vPtGain = k * k;
+    return S;
+  }
+`;
+
 /* ---------------------------------------------------------------- POST FX
    One full-screen pass: chromatic aberration + film grain + vignette.
    Runs before OutputPass, which owns tone-mapping and sRGB. */
@@ -116,9 +141,65 @@ export const PostFXShader = {
       col *= mix(0.30, 1.0, vig);
 
       // Animated grain. Against true black this is most of what stops the
-      // darks from banding into visible steps.
+      // darks from banding into visible steps. A film zeroes it and dithers
+      // after the tone curve instead — see FilmGradeShader.
       float g = hash21(uv * vec2(1920.0, 1080.0) + fract(uTime) * 91.7);
       col += (g - 0.5) * uGrain;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+
+/* ---------------------------------------------------------------- FILM GRADE
+   The last pass of a film, AFTER OutputPass — so it works on the tone-mapped,
+   sRGB-encoded values that are about to be quantised to 8 bits, which is the
+   only place a dither can do its job.
+
+   Two things, both for the encoder and the phone rather than for the eye:
+
+   - Blacks lifted a hair off zero. At true black half of any dither is
+     clipped away, so the darkest gradients — bloom falling off into the void,
+     most of this picture — are exactly where it stops working. A couple of
+     8-bit steps of pedestal gives it room on both sides.
+   - A static blue-noise dither, one step of 8-bit, the same on every frame.
+     It replaces the animated grain: grain that changes every frame is noise
+     an encoder cannot predict, so it eats the bitrate and comes back as
+     mush, while a fixed pattern costs nearly nothing after the first frame.
+
+   Monochrome, so it lands in luma: chroma is subsampled and coarsely coded
+   and a coloured dither would be spent there for nothing. No colorspace or
+   tonemapping include, deliberately — three adds neither to a ShaderMaterial
+   that does not ask, so this writes its input through as it arrives. */
+export const FilmGradeShader = {
+  uniforms: {
+    tDiffuse:   { value: null },
+    uNoise:     { value: null },
+    uNoiseSize: { value: 64 },
+    uLift:      { value: 2 / 255 },
+    uDither:    { value: 1 / 255 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D tDiffuse, uNoise;
+    uniform float uNoiseSize, uLift, uDither;
+
+    void main(){
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
+      col = uLift + col * (1.0 - uLift);
+
+      // Screen-locked, so it holds still while the picture moves under it.
+      // Remapped from uniform to triangular on [-1, 1]: a flat distribution
+      // leaves the noise floor louder in some tones than others, a triangular
+      // one does not.
+      float n = texture2D(uNoise, gl_FragCoord.xy / uNoiseSize).r * 2.0 - 1.0;
+      n = sign(n) * (1.0 - sqrt(1.0 - abs(n)));
+      col += n * uDither;
 
       gl_FragColor = vec4(col, 1.0);
     }

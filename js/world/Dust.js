@@ -8,7 +8,7 @@
  */
 
 import * as THREE from "three";
-import { PALETTE_GLSL } from "./shaders.js";
+import { PALETTE_GLSL, POINT_GLSL } from "./shaders.js";
 
 const COUNT = 9000;
 const SHELL = 260;   // far outside the disc: this is the sky, not the galaxy
@@ -39,20 +39,25 @@ export class Dust {
     this.uniforms = {
       uTime:   { value: 0 },
       uPixel:  { value: 1 },
+      uPtMin:  { value: 0.8 },   // see Tendrils — same clamp, same reasons
+      uPtMax:  { value: 5.0 },
+      uPtRef:  { value: 0.8 },
       uWarmth: { value: 0.4 },
       uEnergy: { value: 0 },
       uBreath: { value: 0 },
+      uVoice:  { value: 0 },
     };
 
     this.mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,   // see Tendrils — a world in front hides the sky
       blending: THREE.AdditiveBlending,
       toneMapped: true,
       vertexShader: /* glsl */ `
-        uniform float uTime, uPixel, uBreath;
+        ${POINT_GLSL}
+        uniform float uTime, uPixel, uBreath, uVoice;
         attribute float aSeed;
         varying float vTw;
         varying float vMag;
@@ -64,13 +69,18 @@ export class Dust {
 
           // Slow, per-star twinkle, gently gathered by the breath.
           vTw = 0.30 + 0.70 * pow(0.5 + 0.5 * sin(uTime * (0.13 + aSeed * 0.5) + aSeed * 90.0), 2.0);
-          vTw *= 0.75 + 0.45 * uBreath;
+          /* The sky answers too. Without this the voice reaches the disc and
+             stops at its edge, so singing lit the galaxy and left the field it
+             sits in dead — and the shell is most of the frame. Half the
+             strength of the breath term: background stars should stir, not
+             flash, or the whole point of a quiet sky is spent. */
+          vTw *= 0.75 + 0.45 * uBreath + uVoice * 0.30;
           vMag = aSeed;
 
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           // Fixed screen size, not distance-attenuated: a star is a point source
           // and should stay a point whatever the camera does.
-          gl_PointSize = clamp(uPixel * (1.0 + aSeed * 4.5), 0.8, 5.0);
+          gl_PointSize = pointSize(uPixel * (1.0 + aSeed * 4.5));
           gl_Position = projectionMatrix * mv;
         }
       `,
@@ -80,6 +90,7 @@ export class Dust {
         uniform float uWarmth, uEnergy;
         varying float vTw;
         varying float vMag;
+        varying float vPtGain;
         void main(){
           vec2 d = gl_PointCoord - 0.5;
           float r2 = dot(d, d);
@@ -88,7 +99,8 @@ export class Dust {
           // Brighter stars run cooler-white, faint ones stay violet — a rough
           // stand-in for stellar colour that keeps the sky in the palette.
           vec3 c = anima(0.18 + vMag * 0.30, 0.30 + vMag * 0.55);
-          gl_FragColor = vec4(c * sprite * vTw * (0.16 + 0.10 * vMag + 0.04 * uEnergy), 1.0);
+          gl_FragColor = vec4(c * sprite * vTw * (0.16 + 0.10 * vMag + 0.04 * uEnergy)
+                              * vPtGain, 1.0);
         }
       `,
     });
@@ -100,11 +112,20 @@ export class Dust {
 
   setPixelRatio(pr) { this.uniforms.uPixel.value = pr; }
 
+  /** As Tendrils.setFilmScale: sizes in 1080-line pixels, with a floor. */
+  setFilmScale(scale, floor) {
+    this.uniforms.uPixel.value = scale;
+    this.uniforms.uPtMin.value = floor * scale;
+    this.uniforms.uPtMax.value = 5.0 * scale;
+    this.uniforms.uPtRef.value = scale;
+  }
+
   update(t, dt, bus) {
     this.uniforms.uTime.value = t;
     this.uniforms.uWarmth.value = bus.warmth;
     this.uniforms.uEnergy.value = bus.energy;
     this.uniforms.uBreath.value = bus.breath;
+    this.uniforms.uVoice.value = bus.voice || 0;
   }
 
   dispose() {

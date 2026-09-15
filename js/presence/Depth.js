@@ -90,10 +90,12 @@ export class Depth {
    * Pass 0 to hand control back to the room.
    *
    * @param {number} seconds the full length of the film
+   * @param {number} from    start this far in — for auditioning the middle of
+   *   a film without sitting through its beginning. A take always starts at 0.
    */
-  scriptTo(seconds, session = null) {
+  scriptTo(seconds, session = null, from = 0) {
     this.scripted = Math.max(0, seconds || 0);
-    this._scriptT = 0;
+    this._scriptT = Math.min(this.scripted, Math.max(0, from));
     this.session = session;
     this.info = null;
   }
@@ -185,6 +187,12 @@ export class Depth {
     this._pokeWeight = 0;
 
     bus.depth = this.value;
+    // The film clock, for anything that follows the film rather than the
+    // room. A FilmDriver publishes its own playhead instead — see `external`.
+    if (this.scripted) {
+      bus.filmT = this._scriptT;
+      bus.filmLen = this.scripted;
+    }
     bus.stillness = this.stillness;
     bus.dwell = this.dwell;
     bus.away = this.away;

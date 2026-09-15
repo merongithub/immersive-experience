@@ -32,7 +32,15 @@ const TRACK_HZ = 60;        // score track resolution
    the last strike off mid-decay. */
 const TAIL = 64;
 
-const yieldToUI = () => new Promise((r) => setTimeout(r, 0));
+/* A MessageChannel hop rather than setTimeout(0). Hidden tabs throttle timers
+   to once a second — and, after five minutes, to once a minute — and a render
+   that yields eighty times would take eighty minutes in the background. A
+   posted message is a task, not a timer, and is not throttled. */
+const _yieldChannel = new MessageChannel();
+const yieldToUI = () => new Promise((r) => {
+  _yieldChannel.port1.onmessage = () => r();
+  _yieldChannel.port2.postMessage(0);
+});
 
 /**
  * @param {object}   opts
